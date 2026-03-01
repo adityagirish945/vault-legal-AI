@@ -35,10 +35,9 @@ def init_firebase():
 def get_browser_id():
     """Generate persistent browser ID using localStorage.
     
-    On first render, streamlit_js_eval returns None because the JS hasn't
-    executed yet. We stop and let Streamlit re-run so the JS result
-    arrives on the second render cycle. After 3 retries we fall back
-    to a server-generated UUID to prevent an infinite blank page.
+    Never blocks rendering. On first load, generates a temporary ID so
+    the page renders immediately. On subsequent reruns, syncs with
+    localStorage for cross-tab persistence.
     """
     import streamlit as st
     from streamlit_js_eval import streamlit_js_eval
@@ -48,36 +47,31 @@ def get_browser_id():
     if "browser_id" in st.session_state and st.session_state.browser_id:
         return st.session_state.browser_id
     
-    # Track how many times we've tried waiting for JS
-    if "bid_retries" not in st.session_state:
-        st.session_state.bid_retries = 0
-    
-    # Try to get from browser's localStorage
+    # Try to get from browser's localStorage (returns None on first render)
     browser_id = streamlit_js_eval(
         js_expressions="localStorage.getItem('vault_browser_id')",
         key="get_bid"
     )
     
-    # On first render, streamlit_js_eval returns None (JS not ready).
-    # Retry up to 3 times, then fall back to a server-side UUID.
+    if browser_id and browser_id != "null":
+        # Got a real value from localStorage — use it
+        st.session_state.browser_id = browser_id
+        return browser_id
+    
     if browser_id is None:
-        st.session_state.bid_retries += 1
-        if st.session_state.bid_retries < 3:
-            st.stop()
-        else:
-            browser_id = str(uuid.uuid4())[:16]
+        # JS hasn't executed yet (first render cycle).
+        # Generate a temporary ID so the page renders immediately.
+        # On the next rerun, JS will have executed and we'll get the real value.
+        temp_id = str(uuid.uuid4())[:16]
+        st.session_state.browser_id = temp_id
+        return temp_id
     
-    # If localStorage had no value (empty string or literal null), generate one
-    if not browser_id or browser_id == "null":
-        browser_id = str(uuid.uuid4())[:16]
-        # Persist to localStorage for future page loads / tabs
-        streamlit_js_eval(
-            js_expressions=f"localStorage.setItem('vault_browser_id', '{browser_id}')",
-            key="set_bid"
-        )
-    
-    # Cache in session state for the rest of this session
-    st.session_state.bid_retries = 0
+    # localStorage returned empty/null — first visit, generate and persist
+    browser_id = str(uuid.uuid4())[:16]
+    streamlit_js_eval(
+        js_expressions=f"localStorage.setItem('vault_browser_id', '{browser_id}')",
+        key="set_bid"
+    )
     st.session_state.browser_id = browser_id
     return browser_id
 
