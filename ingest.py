@@ -3,6 +3,7 @@ ChromaDB Ingestion Pipeline for Vault KB.
 
 Creates 3 persistent collections (L1, L2, L3) and populates them
 with semantically chunked documents from the knowledge base.
+Uses Gemini gemini-embedding-001 via google-genai SDK.
 """
 
 import os
@@ -10,7 +11,9 @@ import sys
 import time
 
 import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from chromadb import Documents, EmbeddingFunction, Embeddings
+from google import genai
+from google.genai import types
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.table import Table
@@ -29,7 +32,47 @@ COLLECTION_L2 = "vault_l2_services"
 COLLECTION_L3 = "vault_l3_discrepancies"
 
 # Embedding model
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "gemini-embedding-001"
+
+
+class GeminiEmbeddingFunction(EmbeddingFunction):
+    """ChromaDB-compatible embedding function using google-genai SDK.
+    
+    Uses 'RETRIEVAL_DOCUMENT' task type for ingestion.
+    """
+    
+    def __init__(self, task_type: str = "RETRIEVAL_DOCUMENT"):
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        api_key = None
+        try:
+            import streamlit as st
+            api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
+        except (ImportError, AttributeError):
+            api_key = os.getenv("GEMINI_API_KEY")
+        
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY not found")
+        
+        self._client = genai.Client(api_key=api_key)
+        self._task_type = task_type
+    
+    def __call__(self, input: Documents) -> Embeddings:
+        """Embed a list of documents using Gemini API."""
+        batch_size = 100
+        all_embeddings = []
+        
+        for i in range(0, len(input), batch_size):
+            batch = input[i:i + batch_size]
+            result = self._client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=batch,
+                config=types.EmbedContentConfig(task_type=self._task_type)
+            )
+            all_embeddings.extend([e.values for e in result.embeddings])
+        
+        return all_embeddings
 
 
 def get_chroma_client(kb_dir: str) -> chromadb.PersistentClient:
@@ -38,18 +81,16 @@ def get_chroma_client(kb_dir: str) -> chromadb.PersistentClient:
     return chromadb.PersistentClient(path=db_path)
 
 
-def get_embedding_function() -> SentenceTransformerEmbeddingFunction:
-    """Get the sentence transformer embedding function."""
-    return SentenceTransformerEmbeddingFunction(
-        model_name=EMBEDDING_MODEL,
-    )
+def get_embedding_function(task_type: str = "RETRIEVAL_DOCUMENT") -> GeminiEmbeddingFunction:
+    """Get the Gemini embedding function."""
+    return GeminiEmbeddingFunction(task_type=task_type)
 
 
 def ingest_chunks(
     client: chromadb.PersistentClient,
     collection_name: str,
     chunks: list,
-    embedding_fn: SentenceTransformerEmbeddingFunction,
+    embedding_fn: GeminiEmbeddingFunction,
 ) -> int:
     """
     Ingest chunks into a ChromaDB collection.
@@ -74,8 +115,8 @@ def ingest_chunks(
         console.print(f"  [yellow]⚠ No chunks to ingest for {collection_name}[/yellow]")
         return 0
 
-    # ChromaDB has a batch size limit; process in batches of 100
-    batch_size = 100
+    # Smaller batches to respect Gemini API rate limits
+    batch_size = 50
     total = len(chunks)
 
     # Deduplicate chunks globally by chunk_id before batching
@@ -123,7 +164,7 @@ def run_ingestion(kb_dir: str):
     # Initialize embedding function
     console.print("[bold]1. Loading embedding model...[/bold]")
     embedding_fn = get_embedding_function()
-    console.print(f"   ✅ Model: [green]{EMBEDDING_MODEL}[/green]\n")
+    console.print(f"   ✅ Model: [green]{EMBEDDING_MODEL} (google-genai SDK)[/green]\n")
 
     # Initialize ChromaDB client
     console.print("[bold]2. Initializing ChromaDB...[/bold]")
@@ -213,7 +254,6 @@ def get_stats(kb_dir: str):
         try:
             col = client.get_collection(name=name, embedding_function=embedding_fn)
             count = col.count()
-            # Get a sample to show metadata keys
             sample = col.peek(limit=1)
             meta_keys = list(sample["metadatas"][0].keys()) if sample["metadatas"] else []
             table.add_row(name, str(count), ", ".join(meta_keys))

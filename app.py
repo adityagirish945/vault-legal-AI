@@ -15,7 +15,8 @@ import os
 import streamlit as st
 from llm import ask, get_gemini_client
 from query import query_kb, format_context_for_llm
-from firebase_chat import get_browser_id, save_chat, load_chats, load_chat, delete_chat
+from firebase_chat import save_chat, load_chats, load_chat, delete_chat
+from vault_auth import check_auth, get_auth_config, get_login_url
 import uuid
 
 # Page config
@@ -94,15 +95,19 @@ section[data-testid="stSidebar"] h1 {
 }
 
 /* ═══════════════════════════════════════════════════════
-   HIDE ALL STREAMLIT CHROME
+   HIDE STREAMLIT CHROME (keep sidebar toggle)
    ═══════════════════════════════════════════════════════ */
 .stDeployButton,
 #MainMenu,
-header[data-testid="stHeader"],
 footer,
 .stActionButton {
     display: none !important;
     visibility: hidden !important;
+}
+/* Make header transparent but keep it interactive (sidebar toggle lives here) */
+header[data-testid="stHeader"] {
+    background: transparent !important;
+    border-bottom: none !important;
 }
 
 /* ── Visit Vault button (top-right) ── */
@@ -644,6 +649,84 @@ div[data-testid="stToast"] {
     box-shadow: 0 12px 40px rgba(0,0,0,0.12) !important;
     font-size: 0.84rem !important; font-weight: 500 !important;
 }
+
+/* ═══════════════════════════════════════════════════════
+   LOGIN PAGE
+   ═══════════════════════════════════════════════════════ */
+.login-page {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 70vh;
+    text-align: center;
+}
+.login-card {
+    background: #FFFFFF;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 2.5rem 3rem;
+    max-width: 420px;
+    width: 100%;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.06);
+}
+.login-card svg { height: 36px; width: auto; margin-bottom: 1rem; }
+.login-card h2 {
+    font-size: 1.3rem; font-weight: 700; color: var(--text);
+    margin: 0.5rem 0 0.3rem 0; letter-spacing: -0.3px;
+}
+.login-card p {
+    font-size: 0.88rem; color: var(--text-3); margin: 0 0 1.5rem 0; line-height: 1.6;
+}
+.login-card .google-btn {
+    display: inline-flex; align-items: center; gap: 0.6rem;
+    padding: 0.7rem 1.5rem;
+    background: #FFFFFF;
+    border: 1.5px solid var(--border);
+    border-radius: 100px;
+    font-size: 0.88rem; font-weight: 600;
+    color: var(--text);
+    text-decoration: none;
+    transition: all 0.2s var(--ease);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.login-card .google-btn:hover {
+    border-color: #4285F4;
+    box-shadow: 0 4px 16px rgba(66,133,244,0.15);
+    transform: translateY(-1px);
+}
+.login-card .google-btn img { width: 18px; height: 18px; }
+.login-footer {
+    font-size: 0.7rem; color: var(--text-3);
+    margin-top: 1.2rem; line-height: 1.5;
+}
+
+/* ── User greeting in sidebar ── */
+.user-greeting {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.6rem 0.3rem;
+    font-size: 0.8rem; color: var(--text-2);
+}
+.user-greeting img {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 1.5px solid var(--border);
+}
+.user-greeting .ug-name { font-weight: 600; color: var(--text); }
+.user-greeting .ug-email { font-size: 0.68rem; color: var(--text-3); }
+
+.logout-btn button {
+    background: transparent !important;
+    color: var(--text-3) !important;
+    border: 1px solid var(--border) !important;
+    font-size: 0.72rem !important;
+    padding: 0.3rem 0.6rem !important;
+    border-radius: 6px !important;
+}
+.logout-btn button:hover {
+    background: rgba(239,68,68,0.06) !important;
+    color: #EF4444 !important;
+    border-color: rgba(239,68,68,0.2) !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -654,8 +737,40 @@ if "chat_id" not in st.session_state:
     st.session_state.chat_id = str(uuid.uuid4())
 if "chat_name" not in st.session_state:
     st.session_state.chat_name = "New Chat"
-if "pending_delete" not in st.session_state:
-    st.session_state.pending_delete = None
+
+# ═══════════════════════════════════════════════════════
+# AUTH GATE — Check Google OAuth before rendering anything
+# ═══════════════════════════════════════════════════════
+user = check_auth()
+
+if user is None:
+    # ── Login Page ──
+    client_id, client_secret, redirect_uri = get_auth_config()
+    login_url = get_login_url(client_id, redirect_uri) if client_id else "#"
+    
+    st.markdown(f"""
+    <div class="login-page">
+        <div class="login-card">
+            {VAULT_LOGO_SVG}
+            <h2>Legal Assistant</h2>
+            <p>Property documentation & legal guidance<br>Exclusively in Bengaluru</p>
+            <a href="{login_url}" class="google-btn">
+                <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google">
+                Sign in with Google
+            </a>
+            <div class="login-footer">
+                Secure sign-in powered by Google OAuth<br>
+                Your data stays private and encrypted
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
+
+# ── User is authenticated — extract info ──
+user_email = user.get("email", "")
+user_name = user.get("name", "User")
+user_picture = user.get("picture", "")
 
 # Sidebar
 with st.sidebar:
@@ -669,12 +784,22 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    # User greeting
+    st.markdown(f"""
+    <div class="user-greeting">
+        <img src="{user_picture}" alt="" referrerpolicy="no-referrer">
+        <div>
+            <div class="ug-name">{user_name}</div>
+            <div class="ug-email">{user_email}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     st.markdown('<div class="new-chat-btn">', unsafe_allow_html=True)
     if st.button("New Chat", use_container_width=True):
         st.session_state.messages = []
         st.session_state.chat_id = str(uuid.uuid4())
         st.session_state.chat_name = "New Chat"
-        st.session_state.pending_delete = None
         st.toast("New conversation started")
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
@@ -682,8 +807,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Chat History")
 
-    browser_id = get_browser_id()
-    chats = load_chats(browser_id)
+    chats = load_chats(user_email)
 
     if not chats:
         st.markdown(
@@ -698,7 +822,7 @@ with st.sidebar:
             if is_active:
                 st.markdown('<div class="chat-active">', unsafe_allow_html=True)
             if st.button(chat["chat_name"], key=chat["chat_id"], use_container_width=True):
-                loaded = load_chat(browser_id, chat["chat_id"])
+                loaded = load_chat(user_email, chat["chat_id"])
                 if loaded:
                     st.session_state.messages = loaded["messages"]
                     st.session_state.chat_id = chat["chat_id"]
@@ -709,7 +833,7 @@ with st.sidebar:
         with col2:
             st.markdown('<div class="del-btn">', unsafe_allow_html=True)
             if st.button("\u2715", key=f"del_{chat['chat_id']}"):
-                delete_chat(browser_id, chat["chat_id"])
+                delete_chat(user_email, chat["chat_id"])
                 if chat["chat_id"] == st.session_state.chat_id:
                     st.session_state.messages = []
                     st.session_state.chat_id = str(uuid.uuid4())
@@ -733,6 +857,16 @@ with st.sidebar:
         </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # Logout button
+    st.markdown('<div class="logout-btn">', unsafe_allow_html=True)
+    if st.button("Sign Out", use_container_width=True):
+        st.session_state.user = None
+        st.session_state.messages = []
+        st.session_state.chat_id = str(uuid.uuid4())
+        st.session_state.chat_name = "New Chat"
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # Main content
 # Visit Vault button (fixed top-right)
@@ -802,13 +936,12 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
 
             kb_dir = os.path.dirname(os.path.abspath(__file__))
             try:
-                answer = ask(kb_dir, last_prompt, st.session_state.messages, verbose=False)
+                answer = ask(kb_dir, last_prompt, st.session_state.messages, user_name=user_name, verbose=False)
                 typing_placeholder.empty()
                 st.markdown(answer)
                 st.session_state.messages.append({"role": "assistant", "content": answer})
 
-                browser_id = get_browser_id()
-                save_chat(browser_id, st.session_state.chat_id, st.session_state.messages, st.session_state.chat_name)
+                save_chat(user_email, user_name, st.session_state.chat_id, st.session_state.messages, st.session_state.chat_name)
 
             except Exception as e:
                 typing_placeholder.empty()
@@ -836,13 +969,12 @@ if prompt := st.chat_input("Ask your question here..."):
         kb_dir = os.path.dirname(os.path.abspath(__file__))
 
         try:
-            answer = ask(kb_dir, prompt, st.session_state.messages, verbose=False)
+            answer = ask(kb_dir, prompt, st.session_state.messages, user_name=user_name, verbose=False)
             typing_placeholder.empty()
             st.markdown(answer)
             st.session_state.messages.append({"role": "assistant", "content": answer})
 
-            browser_id = get_browser_id()
-            save_chat(browser_id, st.session_state.chat_id, st.session_state.messages, st.session_state.chat_name)
+            save_chat(user_email, user_name, st.session_state.chat_id, st.session_state.messages, st.session_state.chat_name)
 
         except Exception as e:
             typing_placeholder.empty()

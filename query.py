@@ -3,13 +3,16 @@ RAG Query Engine for Vault KB.
 
 Routes queries, retrieves relevant chunks from ChromaDB,
 deduplicates, ranks, and returns structured context.
+Uses Gemini gemini-embedding-001 via google-genai SDK.
 """
 
 import os
 from dataclasses import dataclass
 
 import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from chromadb import Documents, EmbeddingFunction, Embeddings
+from google import genai
+from google.genai import types
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -20,7 +23,39 @@ from router import route_query, RouteResult
 console = Console()
 
 # Must match ingest.py
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "gemini-embedding-001"
+
+
+class GeminiEmbeddingFunction(EmbeddingFunction):
+    """ChromaDB-compatible embedding function using google-genai SDK.
+    Uses 'RETRIEVAL_QUERY' task type for search queries.
+    """
+    
+    def __init__(self, task_type: str = "RETRIEVAL_QUERY"):
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        api_key = None
+        try:
+            import streamlit as st
+            api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
+        except (ImportError, AttributeError):
+            api_key = os.getenv("GEMINI_API_KEY")
+        
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY not found")
+        
+        self._client = genai.Client(api_key=api_key)
+        self._task_type = task_type
+    
+    def __call__(self, input: Documents) -> Embeddings:
+        """Embed a list of texts using Gemini API."""
+        result = self._client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=input,
+            config=types.EmbedContentConfig(task_type=self._task_type)
+        )
+        return [e.values for e in result.embeddings]
 
 
 @dataclass
@@ -38,16 +73,16 @@ def get_chroma_client(kb_dir: str) -> chromadb.PersistentClient:
     return chromadb.PersistentClient(path=db_path)
 
 
-def get_embedding_function() -> SentenceTransformerEmbeddingFunction:
-    """Get the embedding function."""
-    return SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL)
+def get_embedding_function(task_type: str = "RETRIEVAL_QUERY") -> GeminiEmbeddingFunction:
+    """Get the Gemini embedding function."""
+    return GeminiEmbeddingFunction(task_type=task_type)
 
 
 def retrieve_from_collection(
     client: chromadb.PersistentClient,
     collection_name: str,
     query: str,
-    embedding_fn: SentenceTransformerEmbeddingFunction,
+    embedding_fn: GeminiEmbeddingFunction,
     top_k: int = 5,
 ) -> list[RetrievedChunk]:
     """Retrieve top-k chunks from a specific collection."""
@@ -86,7 +121,7 @@ def retrieve_from_collection(
 def query_kb(
     kb_dir: str,
     query: str,
-    top_k: int = 5,
+    top_k: int = 12,
     verbose: bool = True,
 ) -> tuple[RouteResult, list[RetrievedChunk]]:
     """
@@ -95,15 +130,6 @@ def query_kb(
     2. Retrieve chunks from each collection
     3. Deduplicate and rank by distance
     4. Return route result and ranked chunks
-
-    Args:
-        kb_dir: Path to the KB directory.
-        query: User's natural language query.
-        top_k: Number of chunks to retrieve per collection.
-        verbose: Whether to print rich output.
-
-    Returns:
-        Tuple of (RouteResult, list of RetrievedChunk).
     """
     # Step 1: Route
     route = route_query(query)
@@ -152,7 +178,6 @@ def query_kb(
         console.print(f"[bold green]Found {len(unique_chunks)} relevant chunks:[/bold green]\n")
 
         for i, chunk in enumerate(unique_chunks, 1):
-            # Build metadata display
             meta_parts = []
             if chunk.metadata.get("service"):
                 meta_parts.append(f"Service: {chunk.metadata['service']}")
@@ -165,7 +190,6 @@ def query_kb(
 
             meta_str = " | ".join(meta_parts)
 
-            # Truncate text for display
             display_text = chunk.text[:500]
             if len(chunk.text) > 500:
                 display_text += "..."
@@ -186,11 +210,7 @@ def query_kb(
 
 
 def format_context_for_llm(chunks: list[RetrievedChunk]) -> str:
-    """
-    Format retrieved chunks into a context string for LLM prompting.
-
-    Returns a structured context block that can be prepended to an LLM prompt.
-    """
+    """Format retrieved chunks into a context string for LLM prompting."""
     if not chunks:
         return ""
 
@@ -224,7 +244,6 @@ if __name__ == "__main__":
 
     route, chunks = query_kb(kb_dir, user_query)
 
-    # Also print the LLM context format
     console.print("\n[bold cyan]═══ LLM Context Format ═══[/bold cyan]\n")
     context = format_context_for_llm(chunks)
     console.print(context)
