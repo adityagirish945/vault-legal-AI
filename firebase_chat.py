@@ -36,8 +36,9 @@ def get_browser_id():
     """Generate persistent browser ID using localStorage.
     
     On first render, streamlit_js_eval returns None because the JS hasn't
-    executed yet. We must stop and let Streamlit re-run so the JS result
-    arrives on the second render cycle.
+    executed yet. We stop and let Streamlit re-run so the JS result
+    arrives on the second render cycle. After 3 retries we fall back
+    to a server-generated UUID to prevent an infinite blank page.
     """
     import streamlit as st
     from streamlit_js_eval import streamlit_js_eval
@@ -47,17 +48,24 @@ def get_browser_id():
     if "browser_id" in st.session_state and st.session_state.browser_id:
         return st.session_state.browser_id
     
+    # Track how many times we've tried waiting for JS
+    if "bid_retries" not in st.session_state:
+        st.session_state.bid_retries = 0
+    
     # Try to get from browser's localStorage
     browser_id = streamlit_js_eval(
         js_expressions="localStorage.getItem('vault_browser_id')",
         key="get_bid"
     )
     
-    # On the very first render, streamlit_js_eval returns None because
-    # the JS hasn't executed yet. We stop here — Streamlit will
-    # automatically re-run, and on the second pass the value will arrive.
+    # On first render, streamlit_js_eval returns None (JS not ready).
+    # Retry up to 3 times, then fall back to a server-side UUID.
     if browser_id is None:
-        st.stop()
+        st.session_state.bid_retries += 1
+        if st.session_state.bid_retries < 3:
+            st.stop()
+        else:
+            browser_id = str(uuid.uuid4())[:16]
     
     # If localStorage had no value (empty string or literal null), generate one
     if not browser_id or browser_id == "null":
@@ -69,6 +77,7 @@ def get_browser_id():
         )
     
     # Cache in session state for the rest of this session
+    st.session_state.bid_retries = 0
     st.session_state.browser_id = browser_id
     return browser_id
 
