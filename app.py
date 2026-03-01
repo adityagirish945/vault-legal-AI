@@ -38,6 +38,15 @@ VAULT_MARK_DATA_URI = "data:image/svg+xml," + "%3Csvg xmlns='http://www.w3.org/2
 
 USER_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/%3E"
 
+SUGGESTION_CHIPS = [
+    "What is E-Khata?",
+    "Khata Transfer process",
+    "My loan is closed. How do I cancel MODT in Bangalore?",
+    "How long does it take to prepare a sale deed?",
+    "I found a resale property. Can you check if it’s legally clear?",
+    "Vault service pricing",
+]
+
 
 # ── Custom CSS ──────────────────────────────────────────────────────────────
 st.markdown("""
@@ -85,6 +94,57 @@ section[data-testid="stSidebar"] h1 {
 }
 
 /* ═══════════════════════════════════════════════════════
+   HIDE ALL STREAMLIT CHROME
+   ═══════════════════════════════════════════════════════ */
+.stDeployButton,
+#MainMenu,
+header[data-testid="stHeader"],
+footer,
+.stActionButton {
+    display: none !important;
+    visibility: hidden !important;
+}
+
+/* ── Visit Vault button (top-right) ── */
+.visit-vault {
+    position: fixed;
+    top: 14px;
+    right: 20px;
+    z-index: 999;
+}
+.visit-vault a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.4rem 0.9rem;
+    background: #FFFFFF;
+    color: var(--brand);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.76rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s var(--ease);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    letter-spacing: 0.2px;
+}
+.visit-vault a:hover {
+    background: var(--brand);
+    color: #FFFFFF;
+    border-color: var(--brand);
+    box-shadow: 0 2px 10px rgba(12,10,147,0.2);
+    transform: translateY(-1px);
+}
+.visit-vault a:hover svg { stroke: #FFFFFF; }
+.visit-vault a svg {
+    width: 13px; height: 13px;
+    stroke: var(--brand); stroke-width: 2;
+    fill: none;
+    transition: stroke 0.2s var(--ease);
+}
+
+/* ═══════════════════════════════════════════════════════
    SIDEBAR
    ═══════════════════════════════════════════════════════ */
 section[data-testid="stSidebar"] {
@@ -102,29 +162,28 @@ section[data-testid="stSidebar"] > div {
 .sb-header {
     background: linear-gradient(135deg, #0C0A93 0%, #1a18b8 100%);
     margin: 0 -0.8rem;
-    padding: 1.5rem 1.2rem 1.3rem 1.2rem;
+    padding: 1.8rem 1.2rem 1.5rem 1.2rem;
 }
-.sb-header svg { height: 22px; width: auto; }
+.sb-header svg { height: 24px; width: auto; }
 .sb-header svg path { fill: white !important; }
 .sb-header svg path:last-child { fill: rgba(255,255,255,0.75) !important; }
 .sb-header-label {
-    font-size: 0.54rem; font-weight: 600;
-    color: rgba(255,255,255,0.5);
-    letter-spacing: 2.8px; text-transform: uppercase;
-    margin-top: 0.45rem;
+    font-size: 0.56rem; font-weight: 600;
+    color: rgba(255,255,255,0.6);
+    letter-spacing: 2.5px; text-transform: uppercase;
 }
 
 /* Section labels */
 section[data-testid="stSidebar"] h2,
 section[data-testid="stSidebar"] h3 {
     color: var(--text-3) !important;
-    font-size: 0.58rem !important;
+    font-size: 0.6rem !important;
     text-transform: uppercase;
-    letter-spacing: 1.8px;
+    letter-spacing: 1.5px;
     font-weight: 600 !important;
-    margin-top: 0.7rem !important;
-    margin-bottom: 0.3rem !important;
-    padding-left: 0.15rem !important;
+    margin-top: 1rem !important;
+    margin-bottom: 0.5rem !important;
+    padding-left: 0.2rem !important;
 }
 
 section[data-testid="stSidebar"] .stMarkdown p {
@@ -134,111 +193,155 @@ section[data-testid="stSidebar"] .stMarkdown p {
 
 section[data-testid="stSidebar"] hr {
     border-color: var(--border) !important;
-    margin: 0.35rem 0 !important;
+    margin: 0.6rem 0 !important;
 }
 
-/* ── ALL sidebar buttons base (chat history items) ── */
+/* ── ALL sidebar buttons base ── */
 section[data-testid="stSidebar"] button {
-    background: transparent !important;
+    background: #FFFFFF !important;
     color: var(--text-2) !important;
-    border: none !important;
-    border-radius: 7px !important;
-    font-size: 0.8rem !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    font-size: 0.82rem !important;
     font-weight: 400 !important;
-    padding: 0.42rem 0.6rem !important;
+    padding: 0.5rem 0.7rem !important;
     transition: all 0.15s var(--ease) !important;
     text-align: left !important;
-    box-shadow: none !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03) !important;
+    transform: none !important;
 }
 
 section[data-testid="stSidebar"] button:hover {
-    background: #EDEEF1 !important;
+    background: #F3F4F6 !important;
     color: var(--text) !important;
+    border-color: #D1D5DB !important;
 }
 
 section[data-testid="stSidebar"] button:active {
-    background: #E2E4E8 !important;
+    background: #E5E7EB !important;
 }
 
-/* ── New Chat button (override — MUST come after generic button rules) ── */
-section[data-testid="stSidebar"] button[kind="secondary"],
-section[data-testid="stSidebar"] button[kind="secondary"]:hover,
-section[data-testid="stSidebar"] button[kind="secondary"]:active {
+/* ── Active chat highlighting (#1) ── */
+.chat-active button {
+    background: var(--brand-dim) !important;
+    border-color: var(--brand) !important;
+    border-left: 3px solid var(--brand) !important;
+    color: var(--brand) !important;
+    font-weight: 600 !important;
+}
+.chat-active button:hover {
+    background: rgba(12,10,147,0.08) !important;
+    border-color: var(--brand) !important;
+    color: var(--brand) !important;
+}
+
+/* ── New Chat button (scoped via wrapper div) ── */
+.new-chat-btn button {
     background: var(--brand) !important;
     color: #FFFFFF !important;
     border: none !important;
     border-radius: 8px !important;
     font-weight: 600 !important;
     font-size: 0.82rem !important;
-    padding: 0.5rem 1.2rem !important;
+    padding: 0.5rem 1rem !important;
     box-shadow: 0 1px 6px rgba(12,10,147,0.18) !important;
-    max-width: 150px !important;
-    margin: 0.6rem auto 0.2rem auto !important;
-    display: block !important;
     text-align: center !important;
-    transition: all 0.3s var(--ease) !important;
+    transition: all 0.25s var(--ease) !important;
 }
 
-section[data-testid="stSidebar"] button[kind="secondary"]:hover {
+.new-chat-btn button:hover {
     background: var(--brand-light) !important;
-    transform: translateY(-1px) !important;
+    color: #FFFFFF !important;
     box-shadow: 0 4px 16px rgba(12,10,147,0.25) !important;
+    transform: translateY(-1px) !important;
 }
 
-section[data-testid="stSidebar"] button[kind="secondary"]:active {
+.new-chat-btn button:active {
+    background: var(--brand) !important;
+    color: #FFFFFF !important;
     transform: scale(0.97) !important;
     box-shadow: 0 1px 3px rgba(12,10,147,0.12) !important;
 }
 
+/* ── Chat history row — force vertical alignment ── */
+section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] {
+    align-items: center !important;
+    gap: 0.25rem !important;
+}
+
 /* ── Delete button ── */
-.del-btn button,
-.del-btn button:hover,
-.del-btn button:active {
-    padding: 0.3rem 0.35rem !important;
-    min-width: 0 !important;
+.del-btn { margin: 0; padding: 0; }
+.del-btn button {
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    padding: 0 !important;
     font-size: 0.72rem !important;
-    line-height: 1 !important;
-    opacity: 0 !important;
-    color: var(--text-3) !important;
-    border-radius: 6px !important;
+    text-align: center !important;
+    color: #B0B4BA !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    background: #FFFFFF !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
 }
-
-/* Show delete on row hover (via column container hover) */
-section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:hover .del-btn button {
-    opacity: 0.4 !important;
-}
-
 .del-btn button:hover {
     background: rgba(239,68,68,0.08) !important;
     color: #EF4444 !important;
-    opacity: 1 !important;
+    border-color: rgba(239,68,68,0.2) !important;
 }
-
 .del-btn button:active {
     background: rgba(239,68,68,0.15) !important;
-    opacity: 1 !important;
+    color: #DC2626 !important;
 }
 
-/* ── About card ── */
-.about-card {
-    background: #FFFFFF;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    padding: 1rem 1.1rem;
-    margin-top: 0.5rem;
-    font-size: 0.8rem;
-    color: var(--text-2);
+/* Delete confirm state (red) */
+.del-confirm { margin: 0; padding: 0; }
+.del-confirm button {
+    width: auto !important;
+    min-width: 32px !important;
+    height: 32px !important;
+    padding: 0 0.6rem !important;
+    font-size: 0.68rem !important;
+    font-weight: 600 !important;
+    color: #FFFFFF !important;
+    background: #EF4444 !important;
+    border: none !important;
+    border-radius: 8px !important;
+    box-shadow: 0 1px 4px rgba(239,68,68,0.25) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    animation: confirm-pulse 0.3s var(--ease) !important;
+}
+.del-confirm button:hover {
+    background: #DC2626 !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 2px 8px rgba(239,68,68,0.35) !important;
+}
+
+@keyframes confirm-pulse {
+    0%   { transform: scale(0.9); opacity: 0.7; }
+    100% { transform: scale(1);   opacity: 1; }
+}
+
+/* ── Compact About / sidebar footer (#7) ── */
+.sb-footer {
+    font-size: 0.72rem;
+    color: var(--text-3);
+    padding: 0.6rem 0.3rem;
     line-height: 1.6;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
 }
-.about-card strong { color: var(--text); font-weight: 600; }
-.about-card hr { border: none; border-top: 1px solid var(--border); margin: 0.7rem 0; }
-.about-card .ct-row {
-    display: flex; align-items: center; gap: 0.55rem;
-    margin-top: 0.35rem; font-size: 0.78rem; color: var(--text-2);
+.sb-footer strong { color: var(--text-2); font-weight: 600; }
+.sb-footer .sf-row {
+    display: flex; align-items: center; gap: 0.4rem;
+    margin-top: 0.2rem; font-size: 0.7rem;
 }
-.about-card .ct-row svg {
-    width: 14px; height: 14px; flex-shrink: 0; color: var(--brand); opacity: 0.7;
+.sb-footer .sf-row svg {
+    width: 12px; height: 12px; flex-shrink: 0; color: var(--brand); opacity: 0.6;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -272,10 +375,28 @@ section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:hover .del-bt
     margin: 0;
 }
 
-/* ── Empty state ── */
+/* ── Empty state with background texture (#5) ── */
 .empty-state {
     text-align: center;
     padding: 3rem 1rem 1rem 1rem;
+    position: relative;
+}
+.empty-state::before {
+    content: '';
+    position: absolute;
+    top: -1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 500px;
+    height: 500px;
+    background: radial-gradient(circle, rgba(12,10,147,0.04) 0%, rgba(77,75,255,0.02) 40%, transparent 70%);
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 0;
+}
+.empty-state > * {
+    position: relative;
+    z-index: 1;
 }
 .empty-state .empty-icon {
     width: 64px;
@@ -303,7 +424,9 @@ section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:hover .del-bt
     margin: 0 auto 1.5rem auto;
     line-height: 1.6;
 }
-.empty-suggestions {
+
+/* ── Suggestion chips (now styled as buttons) (#2) ── */
+.chip-grid {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -311,28 +434,30 @@ section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:hover .del-bt
     max-width: 520px;
     margin: 0 auto;
 }
-.empty-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.5rem 0.9rem;
-    background: #FFFFFF;
-    border: 1px solid var(--border);
-    border-radius: 100px;
-    font-size: 0.78rem;
-    color: var(--text-2);
-    cursor: default;
-    transition: all 0.2s var(--ease);
-    box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+.chip-grid button {
+    display: inline-flex !important;
+    align-items: center !important;
+    padding: 0.5rem 0.9rem !important;
+    background: #FFFFFF !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 100px !important;
+    font-size: 0.78rem !important;
+    color: var(--text-2) !important;
+    cursor: pointer !important;
+    transition: all 0.2s var(--ease) !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03) !important;
+    font-weight: 400 !important;
+    text-align: center !important;
 }
-.empty-chip:hover {
-    border-color: var(--brand);
-    color: var(--brand);
-    box-shadow: 0 2px 8px rgba(12,10,147,0.08);
-    transform: translateY(-1px);
+.chip-grid button:hover {
+    border-color: var(--brand) !important;
+    color: var(--brand) !important;
+    box-shadow: 0 2px 8px rgba(12,10,147,0.08) !important;
+    transform: translateY(-1px) !important;
 }
-.empty-chip .chip-icon {
-    font-size: 0.85rem;
+.chip-grid button:active {
+    transform: scale(0.96) !important;
+    box-shadow: 0 0 0 2px rgba(12,10,147,0.08) !important;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -453,6 +578,31 @@ div[data-testid="stChatInput"] button:active {
 }
 
 /* ═══════════════════════════════════════════════════════
+   TYPING INDICATOR (#4)
+   ═══════════════════════════════════════════════════════ */
+.typing-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0.6rem 0;
+}
+.typing-indicator span {
+    width: 7px;
+    height: 7px;
+    background: var(--brand-light);
+    border-radius: 50%;
+    animation: typing-bounce 1.4s infinite ease-in-out both;
+}
+.typing-indicator span:nth-child(1) { animation-delay: 0s; }
+.typing-indicator span:nth-child(2) { animation-delay: 0.16s; }
+.typing-indicator span:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes typing-bounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
+    40% { transform: scale(1); opacity: 1; }
+}
+
+/* ═══════════════════════════════════════════════════════
    SPINNER & ALERTS
    ═══════════════════════════════════════════════════════ */
 .stSpinner > div { border-top-color: var(--brand) !important; }
@@ -494,11 +644,6 @@ div[data-testid="stToast"] {
     box-shadow: 0 12px 40px rgba(0,0,0,0.12) !important;
     font-size: 0.84rem !important; font-weight: 500 !important;
 }
-
-/* ═══════════════════════════════════════════════════════
-   HIDE DEPLOY BUTTON
-   ═══════════════════════════════════════════════════════ */
-.stDeployButton { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -509,6 +654,8 @@ if "chat_id" not in st.session_state:
     st.session_state.chat_id = str(uuid.uuid4())
 if "chat_name" not in st.session_state:
     st.session_state.chat_name = "New Chat"
+if "pending_delete" not in st.session_state:
+    st.session_state.pending_delete = None
 
 # Sidebar
 with st.sidebar:
@@ -522,12 +669,15 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    st.markdown('<div class="new-chat-btn">', unsafe_allow_html=True)
     if st.button("New Chat", use_container_width=True):
         st.session_state.messages = []
         st.session_state.chat_id = str(uuid.uuid4())
         st.session_state.chat_name = "New Chat"
+        st.session_state.pending_delete = None
         st.toast("New conversation started")
         st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
     st.subheader("Chat History")
@@ -542,8 +692,11 @@ with st.sidebar:
         )
 
     for chat in chats:
-        col1, col2 = st.columns([6, 1], gap="small")
+        is_active = chat["chat_id"] == st.session_state.chat_id
+        col1, col2 = st.columns([4, 1])
         with col1:
+            if is_active:
+                st.markdown('<div class="chat-active">', unsafe_allow_html=True)
             if st.button(chat["chat_name"], key=chat["chat_id"], use_container_width=True):
                 loaded = load_chat(browser_id, chat["chat_id"])
                 if loaded:
@@ -551,9 +704,11 @@ with st.sidebar:
                     st.session_state.chat_id = chat["chat_id"]
                     st.session_state.chat_name = chat["chat_name"]
                     st.rerun()
+            if is_active:
+                st.markdown('</div>', unsafe_allow_html=True)
         with col2:
             st.markdown('<div class="del-btn">', unsafe_allow_html=True)
-            if st.button("✕", key=f"del_{chat['chat_id']}"):
+            if st.button("\u2715", key=f"del_{chat['chat_id']}"):
                 delete_chat(browser_id, chat["chat_id"])
                 if chat["chat_id"] == st.session_state.chat_id:
                     st.session_state.messages = []
@@ -563,26 +718,33 @@ with st.sidebar:
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
+    # Compact sidebar footer (#7)
     st.markdown("---")
-    st.subheader("About")
     st.markdown("""
-    <div class="about-card">
-        <strong>Vault PropTech</strong> helps you navigate property documentation
-        and legal services in Bangalore, Karnataka.
-        <hr>
-        <strong>Contact</strong>
-        <div class="ct-row">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+    <div class="sb-footer">
+        <strong>Vault PropTech</strong> · Property legal services, Bengaluru
+        <div class="sf-row">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
             +91 88619 50376
         </div>
-        <div class="ct-row">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+        <div class="sf-row">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
             info@vaultproptech.com
         </div>
     </div>
     """, unsafe_allow_html=True)
 
 # Main content
+# Visit Vault button (fixed top-right)
+st.markdown("""
+<div class="visit-vault">
+    <a href="https://www.vaultproptech.com/" target="_blank" rel="noopener noreferrer">
+        Visit Vault
+        <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+    </a>
+</div>
+""", unsafe_allow_html=True)
+
 # Hero — centered brand presentation
 st.markdown(f"""
 <div class="hero-block">
@@ -592,7 +754,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Empty state with suggestion chips
+# Empty state with CLICKABLE suggestion chips (#2)
 if not st.session_state.messages:
     st.markdown(f"""
     <div class="empty-state">
@@ -601,16 +763,19 @@ if not st.session_state.messages:
         </div>
         <h3>How can I help you today?</h3>
         <p>Ask about property documentation, legal processes, or Vault's services in Bengaluru.</p>
-        <div class="empty-suggestions">
-            <span class="empty-chip">What is E-Khata?</span>
-            <span class="empty-chip">Khata Transfer process</span>
-            <span class="empty-chip">Due Diligence steps</span>
-            <span class="empty-chip">Documents for registration</span>
-            <span class="empty-chip">BESCOM name change</span>
-            <span class="empty-chip">Vault service pricing</span>
-        </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # Clickable chips — these are real st.button elements
+    st.markdown('<div class="chip-grid">', unsafe_allow_html=True)
+    chip_cols = st.columns(3)
+    for i, chip_text in enumerate(SUGGESTION_CHIPS):
+        with chip_cols[i % 3]:
+            if st.button(chip_text, key=f"chip_{i}"):
+                st.session_state.chat_name = chip_text[:20] + ("..." if len(chip_text) > 20 else "")
+                st.session_state.messages.append({"role": "user", "content": chip_text})
+                st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # Display chat messages
 for message in st.session_state.messages:
@@ -618,7 +783,40 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"], avatar=avatar):
         st.markdown(message["content"])
 
-# Chat input
+# If last message is user (just asked), auto-trigger the response
+if st.session_state.messages and st.session_state.messages[-1]["role"] == "user" and not any(m["role"] == "assistant" for i, m in enumerate(st.session_state.messages) if i == len(st.session_state.messages) - 1):
+    # Check if there's no assistant response for the last user message
+    needs_response = True
+    if len(st.session_state.messages) >= 2 and st.session_state.messages[-1]["role"] != "user":
+        needs_response = False
+
+    if needs_response and st.session_state.messages[-1]["role"] == "user":
+        last_prompt = st.session_state.messages[-1]["content"]
+        with st.chat_message("assistant", avatar=VAULT_MARK_DATA_URI):
+            # Typing indicator (#4)
+            typing_placeholder = st.empty()
+            typing_placeholder.markdown(
+                '<div class="typing-indicator"><span></span><span></span><span></span></div>',
+                unsafe_allow_html=True
+            )
+
+            kb_dir = os.path.dirname(os.path.abspath(__file__))
+            try:
+                answer = ask(kb_dir, last_prompt, st.session_state.messages, verbose=False)
+                typing_placeholder.empty()
+                st.markdown(answer)
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+
+                browser_id = get_browser_id()
+                save_chat(browser_id, st.session_state.chat_id, st.session_state.messages, st.session_state.chat_name)
+
+            except Exception as e:
+                typing_placeholder.empty()
+                error_msg = f"I encountered an error: {str(e)}\n\nPlease make sure:\n1. The knowledge base is ingested (`python setup.py ingest`)\n2. Your GEMINI_API_KEY is set in .env"
+                st.error(error_msg)
+                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+
+# Chat input (normal flow)
 if prompt := st.chat_input("Ask your question here..."):
     if st.session_state.chat_name == "New Chat":
         st.session_state.chat_name = prompt[:20] + ("..." if len(prompt) > 20 else "")
@@ -628,21 +826,29 @@ if prompt := st.chat_input("Ask your question here..."):
         st.markdown(prompt)
 
     with st.chat_message("assistant", avatar=VAULT_MARK_DATA_URI):
-        with st.spinner("Searching knowledge base..."):
-            kb_dir = os.path.dirname(os.path.abspath(__file__))
+        # Typing indicator (#4)
+        typing_placeholder = st.empty()
+        typing_placeholder.markdown(
+            '<div class="typing-indicator"><span></span><span></span><span></span></div>',
+            unsafe_allow_html=True
+        )
 
-            try:
-                answer = ask(kb_dir, prompt, st.session_state.messages, verbose=False)
-                st.markdown(answer)
-                st.session_state.messages.append({"role": "assistant", "content": answer})
+        kb_dir = os.path.dirname(os.path.abspath(__file__))
 
-                browser_id = get_browser_id()
-                save_chat(browser_id, st.session_state.chat_id, st.session_state.messages, st.session_state.chat_name)
+        try:
+            answer = ask(kb_dir, prompt, st.session_state.messages, verbose=False)
+            typing_placeholder.empty()
+            st.markdown(answer)
+            st.session_state.messages.append({"role": "assistant", "content": answer})
 
-            except Exception as e:
-                error_msg = f"I encountered an error: {str(e)}\n\nPlease make sure:\n1. The knowledge base is ingested (`python setup.py ingest`)\n2. Your GEMINI_API_KEY is set in .env"
-                st.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+            browser_id = get_browser_id()
+            save_chat(browser_id, st.session_state.chat_id, st.session_state.messages, st.session_state.chat_name)
+
+        except Exception as e:
+            typing_placeholder.empty()
+            error_msg = f"I encountered an error: {str(e)}\n\nPlease make sure:\n1. The knowledge base is ingested (`python setup.py ingest`)\n2. Your GEMINI_API_KEY is set in .env"
+            st.error(error_msg)
+            st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
 
 # Footer
