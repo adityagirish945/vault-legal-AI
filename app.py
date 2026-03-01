@@ -682,8 +682,8 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Chat History")
 
-browser_id = get_browser_id() or "anonymous"
-chats = load_chats(browser_id) if browser_id != "anonymous" else []
+    browser_id = get_browser_id() or "anonymous"
+    chats = load_chats(browser_id) if browser_id != "anonymous" else []
 
     if not chats:
         st.markdown(
