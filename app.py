@@ -100,7 +100,14 @@ section[data-testid="stSidebar"] h1 {
 .stDeployButton,
 #MainMenu,
 footer,
-.stActionButton {
+.stActionButton,
+.stToolbar,
+[data-testid="stToolbar"],
+.styles_terminalButton__JBj5T,
+[data-testid="stDecoration"],
+#stDecoration,
+.viewerBadge_container__r5tak,
+.styles_viewerBadge__CvC9N {
     display: none !important;
     visibility: hidden !important;
 }
@@ -272,6 +279,18 @@ section[data-testid="stSidebar"] button:active {
 section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] {
     align-items: center !important;
     gap: 0.25rem !important;
+    margin-top: -0.22rem !important;
+    margin-bottom: -0.22rem !important;
+}
+
+/* Collapse Streamlit's default vertical block spacing in sidebar */
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] {
+    margin-bottom: -0.22rem !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: 0.3rem !important;
 }
 
 /* ── Delete button ── */
