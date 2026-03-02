@@ -117,29 +117,42 @@ def clear_user_cookie():
 
 def inject_cookie_restore_script():
     """
-    Inject JS that reads the cookie from the browser and, if found,
-    redirects to ?vault_restore=<base64> so Python can pick it up.
-    This bypasses st.context.headers which doesn't work on Streamlit Cloud.
+    Inject a <script> element into the PARENT document that reads the cookie.
+    Chrome blocks parent.document.cookie reads from iframes, but a script
+    injected into the parent runs in the parent context with full cookie access.
     """
     js = f"""
     <script>
     (function() {{
-        // Only run in the parent frame context
         try {{
-            var cookies = parent.document.cookie;
+            var s = parent.document.createElement('script');
+            s.textContent = `
+                (function() {{
+                    var match = document.cookie.match(/(^|;\\\\s*){_COOKIE_NAME}=([^;]*)/);
+                    if (match) {{
+                        var val = decodeURIComponent(match[2]);
+                        var b64 = btoa(unescape(encodeURIComponent(val)));
+                        var url = new URL(window.location.href);
+                        if (!url.searchParams.has('vault_restore') && !url.searchParams.has('code')) {{
+                            url.searchParams.set('vault_restore', b64);
+                            window.location.replace(url.toString());
+                        }}
+                    }}
+                }})();
+            `;
+            parent.document.head.appendChild(s);
         }} catch(e) {{
+            // Fallback: try reading directly (works on Safari)
             var cookies = document.cookie;
-        }}
-        var match = cookies.match(/(^|;\\s*){_COOKIE_NAME}=([^;]*)/);
-        if (match) {{
-            var val = decodeURIComponent(match[2]);
-            // base64 encode to safely pass as query param
-            var b64 = btoa(unescape(encodeURIComponent(val)));
-            // Check if we are already on the restore flow or logged in
-            var url = new URL(parent.window.location.href);
-            if (!url.searchParams.has('vault_restore') && !url.searchParams.has('code')) {{
-                url.searchParams.set('vault_restore', b64);
-                parent.window.location.replace(url.toString());
+            var match = cookies.match(/(^|;\\\\s*){_COOKIE_NAME}=([^;]*)/);
+            if (match) {{
+                var val = decodeURIComponent(match[2]);
+                var b64 = btoa(unescape(encodeURIComponent(val)));
+                var url = new URL(parent.window.location.href);
+                if (!url.searchParams.has('vault_restore') && !url.searchParams.has('code')) {{
+                    url.searchParams.set('vault_restore', b64);
+                    parent.window.location.replace(url.toString());
+                }}
             }}
         }}
     }})();
