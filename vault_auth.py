@@ -1,4 +1,4 @@
-"""Google OAuth 2.0 authentication for Vault PropTech."""
+"""Google OAuth 2.0 authentication for Vault PropTech with encoding"""
 import os
 import requests
 import streamlit as st
