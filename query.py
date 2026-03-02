@@ -121,7 +121,7 @@ def retrieve_from_collection(
 def query_kb(
     kb_dir: str,
     query: str,
-    top_k: int = 12,
+    top_k: int = 20,
     verbose: bool = True,
 ) -> tuple[RouteResult, list[RetrievedChunk]]:
     """
