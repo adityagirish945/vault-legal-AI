@@ -1,6 +1,5 @@
-"""Firebase chat history management."""
+"""Firebase chat history management — keyed by user email."""
 import os
-import hashlib
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -32,53 +31,22 @@ def init_firebase():
     _db = firestore.client()
     return _db
 
-def get_browser_id():
-    """Generate persistent browser ID using localStorage.
-    
-    Never blocks rendering. On first load, generates a temporary ID so
-    the page renders immediately. On subsequent reruns, syncs with
-    localStorage for cross-tab persistence.
-    """
-    import streamlit as st
-    from streamlit_js_eval import streamlit_js_eval
-    import uuid
-    
-    # If we already resolved the browser_id this session, return it
-    if "browser_id" in st.session_state and st.session_state.browser_id:
-        return st.session_state.browser_id
-    
-    # Try to get from browser's localStorage (returns None on first render)
-    browser_id = streamlit_js_eval(
-        js_expressions="localStorage.getItem('vault_browser_id')",
-        key="get_bid"
-    )
-    
-    if browser_id and browser_id != "null":
-        # Got a real value from localStorage — use it
-        st.session_state.browser_id = browser_id
-        return browser_id
-    
-    if browser_id is None:
-        # JS hasn't executed yet (first render cycle).
-        # Generate a temporary ID so the page renders immediately.
-        # On the next rerun, JS will have executed and we'll get the real value.
-        temp_id = str(uuid.uuid4())[:16]
-        st.session_state.browser_id = temp_id
-        return temp_id
-    
-    # localStorage returned empty/null — first visit, generate and persist
-    browser_id = str(uuid.uuid4())[:16]
-    streamlit_js_eval(
-        js_expressions=f"localStorage.setItem('vault_browser_id', '{browser_id}')",
-        key="set_bid"
-    )
-    st.session_state.browser_id = browser_id
-    return browser_id
 
-def save_chat(browser_id, chat_id, messages, chat_name):
-    """Save chat to Firestore and update cache."""
+def save_chat(user_email, user_name, chat_id, messages, chat_name):
+    """Save chat to Firestore under the user's email document.
+    
+    Firestore structure:
+        ChatHistory/{user_email}
+            Name: "Aditya"
+            email: "adityadeepa634@gmail.com"
+            chats:
+                {chat_id}:
+                    chat_name: "..."
+                    messages: [...]
+                    updated_at: timestamp
+    """
     db = init_firebase()
-    doc_ref = db.collection("ChatHistory").document(browser_id)
+    doc_ref = db.collection("ChatHistory").document(user_email)
     
     # Get existing data or create new
     doc = doc_ref.get()
@@ -88,6 +56,10 @@ def save_chat(browser_id, chat_id, messages, chat_name):
             data["chats"] = {}
     else:
         data = {"chats": {}}
+    
+    # Always set the top-level user fields
+    data["Name"] = user_name
+    data["email"] = user_email
     
     # Update the specific chat
     data["chats"][chat_id] = {
@@ -100,12 +72,12 @@ def save_chat(browser_id, chat_id, messages, chat_name):
     doc_ref.set(data)
     
     # Update cache immediately
-    cache_chat_history(browser_id, chat_id, messages)
+    cache_chat_history(user_email, chat_id, messages)
 
-def load_chats(browser_id):
-    """Load chat list (metadata only) for a browser."""
+def load_chats(user_email):
+    """Load chat list (metadata only) for a user."""
     db = init_firebase()
-    doc = db.collection("ChatHistory").document(browser_id).get()
+    doc = db.collection("ChatHistory").document(user_email).get()
     if not doc.exists:
         return []
     
@@ -115,16 +87,16 @@ def load_chats(browser_id):
         for cid, data in chats.items()
     ], key=lambda x: x["updated_at"], reverse=True) if chats else []
 
-def load_chat(browser_id, chat_id):
+def load_chat(user_email, chat_id):
     """Load specific chat messages (lazy load with Redis cache)."""
     # Try cache first
-    cached = get_cached_history(browser_id, chat_id)
+    cached = get_cached_history(user_email, chat_id)
     if cached:
         return {"messages": cached}
     
     # Load from Firebase
     db = init_firebase()
-    doc = db.collection("ChatHistory").document(browser_id).get()
+    doc = db.collection("ChatHistory").document(user_email).get()
     if not doc.exists:
         return None
     
@@ -133,13 +105,13 @@ def load_chat(browser_id, chat_id):
     
     # Cache for next time
     if chat_data and "messages" in chat_data:
-        cache_chat_history(browser_id, chat_id, chat_data["messages"])
+        cache_chat_history(user_email, chat_id, chat_data["messages"])
     
     return chat_data
 
-def delete_chat(browser_id, chat_id):
+def delete_chat(user_email, chat_id):
     """Delete a chat."""
     db = init_firebase()
-    db.collection("ChatHistory").document(browser_id).update({
+    db.collection("ChatHistory").document(user_email).update({
         f"chats.{chat_id}": firestore.DELETE_FIELD
     })

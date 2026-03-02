@@ -27,16 +27,16 @@ def get_redis_client():
     _redis_client = redis.from_url(redis_url, decode_responses=True)
     return _redis_client
 
-def cache_chat_history(browser_id, chat_id, messages):
+def cache_chat_history(user_email, chat_id, messages):
     """Cache chat history in Redis."""
     client = get_redis_client()
-    key = f"chat:{browser_id}:{chat_id}"
+    key = f"chat:{user_email}:{chat_id}"
     client.setex(key, 3600, json.dumps(messages))  # 1 hour TTL
 
-def get_cached_history(browser_id, chat_id):
+def get_cached_history(user_email, chat_id):
     """Get cached chat history from Redis."""
     client = get_redis_client()
-    key = f"chat:{browser_id}:{chat_id}"
+    key = f"chat:{user_email}:{chat_id}"
     data = client.get(key)
     return json.loads(data) if data else None
 

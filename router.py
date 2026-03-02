@@ -1,11 +1,13 @@
 """
-Query Router for Vault KB.
-
-Classifies user queries into one of 3 intents and returns the
-appropriate ChromaDB collection(s) to search.
+Query Router for Vault KB using LLM classification.
 """
 
+import os
 from dataclasses import dataclass
+from dotenv import load_dotenv
+from google import genai
+
+load_dotenv()
 
 # Collection names (must match ingest.py)
 COLLECTION_L1 = "vault_l1_legal"
@@ -16,141 +18,87 @@ COLLECTION_L3 = "vault_l3_discrepancies"
 @dataclass
 class RouteResult:
     """Result of query routing."""
-    intent: str  # "general", "vault_service", or "issue"
+    intent: str
     collections: list[str]
     confidence: float
     reason: str
 
 
-# Intent keywords — ordered by priority (issue > vault_service > general)
-ISSUE_KEYWORDS = [
-    "problem", "issue", "rejected", "stuck", "delayed", "delay",
-    "error", "wrong", "mismatch", "complaint", "not working",
-    "discrepancy", "failed", "failure", "denied", "denied",
-    "corruption", "bribe", "incorrect", "missing", "lost",
-    "frustrated", "confused", "help me", "what went wrong",
-    "why was", "why is", "pending", "not received", "not updated",
-    "dispute", "pain", "confusion", "opaque", "unclear",
-]
-
-VAULT_SERVICE_KEYWORDS = [
-    "vault", "vault proptech", "vaultproptech",
-    "service", "price", "pricing", "cost", "charge", "fee",
-    "book", "apply", "hire", "engage", "how much",
-    "vault charge", "your service", "your team",
-    "i need", "i want", "can you help", "do you offer",
-    "how to get", "how to apply",
-    "blog", "article", "website",
-]
-
-GENERAL_KEYWORDS = [
-    "what is", "what are", "how to", "how does", "explain",
-    "legal", "law", "act", "section", "provision",
-    "process", "procedure", "step", "steps",
-    "document", "documents", "required", "checklist",
-    "fee structure", "timeline", "time",
-    "definition", "meaning", "difference between",
-    "registration", "transfer", "khata", "e-khata",
-    "bescom", "property tax", "deed", "conveyancing",
-    "modt", "encumbrance", "ec", "gruha jyoti",
-    "rental", "lease", "agreement", "due diligence",
-    "stamp duty", "sub-registrar", "bbmp", "bda",
-    "inheritance", "gift deed", "sale deed", "will",
-]
-
-
-def _keyword_score(query_lower: str, keywords: list[str]) -> float:
-    """Calculate keyword match score for a query."""
-    matches = 0
-    total_weight = 0
-    for kw in keywords:
-        if kw in query_lower:
-            # Longer keywords get more weight
-            weight = len(kw.split())
-            matches += weight
-            total_weight += weight
-
-    # Normalize to 0-1 range
-    if matches == 0:
-        return 0.0
-    return min(1.0, matches / 5.0)  # cap at 5 weighted matches
-
-
 def route_query(query: str) -> RouteResult:
-    """
-    Classify a user query and return the appropriate collections to search.
+    """Use LLM to classify query and route to appropriate collections."""
+    
+    try:
+        import streamlit as st
+        api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
+    except (ImportError, AttributeError):
+        api_key = os.getenv("GEMINI_API_KEY")
+    
+    if not api_key:
+        # Fallback to simple routing if no API key
+        return RouteResult("general", [COLLECTION_L1], 0.5, "Fallback routing")
+    
+    client = genai.Client(api_key=api_key)
+    
+    prompt = f"""Classify this user query about property services in Bangalore into ONE category:
 
-    Routing logic:
-    - Issue/discrepancy queries → L2 + L3
-    - Vault service queries → L2
-    - General/legal queries → L1
-    - Ambiguous → L1 (default, broadest knowledge)
+CATEGORIES:
+1. general - Pure legal/process questions (What is X? How does Y work? Legal requirements, documents, procedures)
+2. service - Questions about Vault PropTech's services, pricing, booking, or offerings
+3. issue - Problems, rejections, delays, complaints, discrepancies, or troubleshooting
 
-    Args:
-        query: User's natural language query.
+QUERY: "{query}"
 
-    Returns:
-        RouteResult with intent, collections, confidence, and reason.
-    """
-    query_lower = query.lower().strip()
+Respond ONLY in this format:
+CATEGORY: [general OR service OR issue]
+CONFIDENCE: [0.0-1.0]
+REASON: [brief explanation]"""
 
-    # Score each intent
-    issue_score = _keyword_score(query_lower, ISSUE_KEYWORDS)
-    vault_score = _keyword_score(query_lower, VAULT_SERVICE_KEYWORDS)
-    general_score = _keyword_score(query_lower, GENERAL_KEYWORDS)
-
-    # Boost issue score if question words suggest a problem
-    problem_patterns = [
-        "why was", "why is", "what happened", "what went wrong",
-        "not getting", "not received", "was rejected",
-    ]
-    for pattern in problem_patterns:
-        if pattern in query_lower:
-            issue_score += 0.3
-
-    # Boost vault score if explicitly mentioning Vault
-    if "vault" in query_lower:
-        vault_score += 0.4
-
-    # Determine intent (priority: issue > vault > general)
-    scores = {
-        "issue": issue_score,
-        "vault_service": vault_score,
-        "general": general_score,
-    }
-
-    best_intent = max(scores, key=scores.get)
-    best_score = scores[best_intent]
-
-    # If all scores are very low, default to general
-    if best_score < 0.1:
-        best_intent = "general"
-        best_score = 0.3  # low confidence default
-
-    # Map intent to collections
-    intent_to_collections = {
-        "issue": [COLLECTION_L2, COLLECTION_L3],
-        "vault_service": [COLLECTION_L2],
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-lite",
+            contents=prompt
+        )
+        text = response.text.strip()
+    except Exception:
+        # Fallback on API error
+        return RouteResult("general", [COLLECTION_L1], 0.5, "API error fallback")
+    
+    # Parse response
+    category = "general"
+    confidence = 0.7
+    reason = "LLM classification"
+    
+    for line in text.split('\n'):
+        line = line.strip()
+        if line.startswith("CATEGORY:"):
+            category = line.split(":", 1)[1].strip().lower()
+        elif line.startswith("CONFIDENCE:"):
+            try:
+                confidence = float(line.split(":", 1)[1].strip())
+            except:
+                confidence = 0.7
+        elif line.startswith("REASON:"):
+            reason = line.split(":", 1)[1].strip()
+    
+    # Map to collections
+    collection_map = {
         "general": [COLLECTION_L1],
+        "service": [COLLECTION_L2, COLLECTION_L3],
+        "issue": [COLLECTION_L1, COLLECTION_L2, COLLECTION_L3],
     }
-
-    # Generate reason
-    reasons = {
-        "issue": "Query indicates a problem, discrepancy, or complaint",
-        "vault_service": "Query is about Vault's services, pricing, or offerings",
-        "general": "Query is a general/legal question about property services",
-    }
-
+    
+    collections = collection_map.get(category, [COLLECTION_L1])
+    
     return RouteResult(
-        intent=best_intent,
-        collections=intent_to_collections[best_intent],
-        confidence=min(1.0, best_score),
-        reason=reasons[best_intent],
+        intent=category,
+        collections=collections,
+        confidence=confidence,
+        reason=reason,
     )
 
 
 if __name__ == "__main__":
-    """Quick test of the router."""
+    """Test the LLM router."""
     test_queries = [
         "What is Khata Transfer?",
         "How much does Vault charge for E-Khata?",
@@ -158,7 +106,7 @@ if __name__ == "__main__":
         "What documents are needed for property registration?",
         "I need help with BESCOM name change",
         "Why is my Khata transfer stuck in pending?",
-        "What is the legal process for MODT cancellation?",
+        "What is the legal process for MODT cancellation and can Vault help?",
         "Can Vault help with due diligence?",
         "The property tax portal shows wrong owner name",
     ]
