@@ -163,10 +163,17 @@ section[data-testid="stSidebar"] > div {
     padding-right: 0.8rem !important;
 }
 
-/* Brand header — flush to edges */
+/* Remove any top spacing from first element */
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+}
+
+/* Brand header — flush to edges and top */
 .sb-header {
     background: linear-gradient(135deg, #0C0A93 0%, #1a18b8 100%);
     margin: 0 -0.8rem;
+    margin-top: 0 !important;
     padding: 1.8rem 1.2rem 1.5rem 1.2rem;
 }
 .sb-header svg { height: 24px; width: auto; }
@@ -481,31 +488,69 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
    CHAT MESSAGES
    ═══════════════════════════════════════════════════════ */
 div[data-testid="stChatMessage"] {
+    border-radius: var(--radius-lg) !important;
+    padding: 1.2rem 1.5rem !important;
+    margin-bottom: 1rem !important;
+    transition: all 0.3s var(--ease) !important;
+    animation: messageSlideIn 0.4s var(--ease) !important;
+    opacity: 0;
+    animation-fill-mode: forwards !important;
+}
+
+@keyframes messageSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* User message - clean white with blue accent */
+div[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
     background: #FFFFFF !important;
     border: 1px solid var(--border) !important;
-    border-radius: var(--radius-lg) !important;
-    padding: 1rem 1.25rem !important;
-    margin-bottom: 0.5rem !important;
-    transition: all 0.2s var(--ease) !important;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.03) !important;
+    border-left: 4px solid var(--brand) !important;
+    box-shadow: 0 2px 8px rgba(12,10,147,0.08) !important;
 }
 
-div[data-testid="stChatMessage"]:hover {
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important;
+div[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]):hover {
+    box-shadow: 0 4px 12px rgba(12,10,147,0.12) !important;
+    transform: translateX(2px) !important;
 }
 
-div[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
-    border-left: 3px solid var(--brand) !important;
-    background: #FFFFFF !important;
-}
-
+/* Assistant message - subtle background with gradient accent */
 div[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
-    border-left: 3px solid var(--brand-light) !important;
-    background: var(--surface) !important;
+    background: linear-gradient(135deg, rgba(12,10,147,0.02) 0%, rgba(77,75,255,0.03) 100%) !important;
+    border: 1px solid rgba(12,10,147,0.08) !important;
+    border-left: 4px solid var(--brand-light) !important;
+    box-shadow: 0 2px 10px rgba(77,75,255,0.06) !important;
 }
 
+div[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]):hover {
+    box-shadow: 0 4px 14px rgba(77,75,255,0.1) !important;
+    transform: translateX(-2px) !important;
+}
+
+/* Avatar styling */
 div[data-testid="stChatMessage"] img {
-    width: 24px !important; height: 24px !important; border-radius: 6px !important;
+    width: 32px !important; 
+    height: 32px !important; 
+    border-radius: 8px !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1) !important;
+}
+
+/* User avatar - add subtle border */
+div[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) img {
+    border: 2px solid var(--brand) !important;
+}
+
+/* Assistant avatar - add subtle glow */
+div[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) img {
+    border: 2px solid var(--brand-light) !important;
+    box-shadow: 0 0 12px rgba(77,75,255,0.3) !important;
 }
 
 div[data-testid="stChatMessage"] p {
@@ -600,23 +645,30 @@ div[data-testid="stChatInput"] button:active {
 .typing-indicator {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 0.6rem 0;
+    gap: 5px;
+    padding: 1rem 0;
 }
 .typing-indicator span {
-    width: 7px;
-    height: 7px;
-    background: var(--brand-light);
+    width: 8px;
+    height: 8px;
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-light) 100%);
     border-radius: 50%;
     animation: typing-bounce 1.4s infinite ease-in-out both;
+    box-shadow: 0 2px 4px rgba(77,75,255,0.2);
 }
 .typing-indicator span:nth-child(1) { animation-delay: 0s; }
 .typing-indicator span:nth-child(2) { animation-delay: 0.16s; }
 .typing-indicator span:nth-child(3) { animation-delay: 0.32s; }
 
 @keyframes typing-bounce {
-    0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
-    40% { transform: scale(1); opacity: 1; }
+    0%, 80%, 100% { 
+        transform: scale(0.7) translateY(0); 
+        opacity: 0.4; 
+    }
+    40% { 
+        transform: scale(1.1) translateY(-8px); 
+        opacity: 1; 
+    }
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -718,6 +770,8 @@ div[data-testid="stToast"] {
     display: flex; align-items: center; gap: 0.5rem;
     padding: 0.6rem 0.3rem;
     font-size: 0.8rem; color: var(--text-2);
+    margin-top: 1.0rem;
+    margin-bottom: 1.25rem;
 }
 .user-greeting img {
     width: 28px; height: 28px; border-radius: 50%;
@@ -764,7 +818,7 @@ if user is None:
     <div class="login-page">
         <div class="login-card">
             {VAULT_LOGO_SVG}
-            <h2>Legal Assistant</h2>
+            <h2>Vault Legal Assistant</h2>
             <p>Property documentation & legal guidance<br>Exclusively in Bengaluru</p>
             <a href="{login_url}" class="google-btn">
                 <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google">
@@ -911,9 +965,6 @@ st.markdown(f"""
 if not st.session_state.messages:
     st.markdown(f"""
     <div class="empty-state">
-        <div class="empty-icon">
-            {VAULT_LOGO_SVG}
-        </div>
         <h3>How can I help you today?</h3>
         <p>Ask about property documentation, legal processes, or Vault's services in Bengaluru.</p>
     </div>
@@ -932,7 +983,7 @@ if not st.session_state.messages:
 
 # Display chat messages
 for message in st.session_state.messages:
-    avatar = VAULT_MARK_DATA_URI if message["role"] == "assistant" else USER_AVATAR
+    avatar = VAULT_MARK_DATA_URI if message["role"] == "assistant" else user_picture
     with st.chat_message(message["role"], avatar=avatar):
         st.markdown(message["content"])
 
@@ -974,7 +1025,7 @@ if prompt := st.chat_input("Ask your question here..."):
         st.session_state.chat_name = prompt[:20] + ("..." if len(prompt) > 20 else "")
 
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user", avatar=USER_AVATAR):
+    with st.chat_message("user", avatar=user_picture):
         st.markdown(prompt)
 
     with st.chat_message("assistant", avatar=VAULT_MARK_DATA_URI):
