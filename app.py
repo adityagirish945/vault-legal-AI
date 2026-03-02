@@ -101,8 +101,6 @@ section[data-testid="stSidebar"] h1 {
 #MainMenu,
 footer,
 .stActionButton,
-.stToolbar,
-[data-testid="stToolbar"],
 .styles_terminalButton__JBj5T,
 [data-testid="stDecoration"],
 #stDecoration,
@@ -110,6 +108,10 @@ footer,
 .styles_viewerBadge__CvC9N {
     display: none !important;
     visibility: hidden !important;
+}
+/* Hide toolbar action buttons (Fork/GitHub) but keep sidebar toggle */
+[data-testid="stToolbar"] > [data-testid="stToolbarActions"] {
+    display: none !important;
 }
 /* Make header transparent but keep it interactive (sidebar toggle lives here) */
 header[data-testid="stHeader"] {
@@ -868,6 +870,8 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    st.markdown('<div style="margin-top: 1.2rem;"></div>', unsafe_allow_html=True)
+
     # Visit Vault button — appealing gradient style
     st.markdown("""
     <div class="visit-vault-sb">
@@ -879,7 +883,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     # Spacer
-    st.markdown('<div style="margin-top: 0.8rem;"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="margin-top: 1.8rem;"></div>', unsafe_allow_html=True)
 
     # Logout button
     st.markdown('<div class="logout-btn">', unsafe_allow_html=True)
