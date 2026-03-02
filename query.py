@@ -83,7 +83,7 @@ def retrieve_from_collection(
     collection_name: str,
     query: str,
     embedding_fn: GeminiEmbeddingFunction,
-    top_k: int = 5,
+    top_k: int = 20,
 ) -> list[RetrievedChunk]:
     """Retrieve top-k chunks from a specific collection."""
     try:
@@ -121,7 +121,7 @@ def retrieve_from_collection(
 def query_kb(
     kb_dir: str,
     query: str,
-    top_k: int = 12,
+    top_k: int = 20,
     verbose: bool = True,
 ) -> tuple[RouteResult, list[RetrievedChunk]]:
     """

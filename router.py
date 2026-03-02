@@ -44,7 +44,7 @@ def route_query(query: str) -> RouteResult:
 CATEGORIES:
 1. general - Pure legal/process questions (What is X? How does Y work? Legal requirements, documents, procedures)
 2. service - Questions about Vault PropTech's services, pricing, booking, or offerings
-3. issue - Problems, rejections, delays, complaints, discrepancies, or troubleshooting
+3. issue - Problems, rejections, delays, complaints, discrepancies, or troubleshooting,fAQs
 
 QUERY: "{query}"
 
@@ -55,7 +55,7 @@ REASON: [brief explanation]"""
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash-lite",
+            model="gemini-2.5-flash",
             contents=prompt
         )
         text = response.text.strip()
