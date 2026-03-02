@@ -747,29 +747,22 @@ if user is None:
     # ── Login Page ──
     client_id, client_secret, redirect_uri = get_auth_config()
     login_url = get_login_url(client_id, redirect_uri) if client_id else "#"
-
-    # Login card — logo, title, subtitle (pure HTML, no links)
+    
     st.markdown(f"""
     <div class="login-page">
         <div class="login-card">
             {VAULT_LOGO_SVG}
             <h2>Legal Assistant</h2>
-            <p>Property documentation &amp; legal guidance<br>Exclusively in Bengaluru</p>
+            <p>Property documentation & legal guidance<br>Exclusively in Bengaluru</p>
+            <a href="{login_url}" class="google-btn">
+                <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google">
+                Sign in with Google
+            </a>
+            <div class="login-footer">
+                Secure sign-in powered by Google OAuth<br>
+                Your data stays private and encrypted
+            </div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Google sign-in button — use st.link_button so Streamlit doesn't sanitize the URL
-    _btn_cols = st.columns([1, 1.2, 1])
-    with _btn_cols[1]:
-        st.link_button("🔐  Sign in with Google", login_url, use_container_width=True)
-
-    st.markdown("""
-    <div style="text-align:center;margin-top:0.8rem;">
-        <span style="font-size:0.7rem;color:#9CA3AF;line-height:1.5;">
-            Secure sign-in powered by Google OAuth<br>
-            Your data stays private and encrypted
-        </span>
     </div>
     """, unsafe_allow_html=True)
     st.stop()
