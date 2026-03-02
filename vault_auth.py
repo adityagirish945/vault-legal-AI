@@ -3,8 +3,8 @@ import json
 import os
 import requests
 import streamlit as st
-from http.cookies import SimpleCookie
-from urllib.parse import quote
+from urllib.parse import quote, unquote
+from base64 import b64encode, b64decode
 
 # ── Fixed redirect URI — must match Google Cloud Console EXACTLY ──
 _DEFAULT_REDIRECT = "https://vault-legal-ai-v1.streamlit.app/"
@@ -85,38 +85,9 @@ def get_user_from_code(code, client_id, client_secret, redirect_uri):
 
 # ── Cookie helpers ──────────────────────────────────────────────────────────
 
-def _read_cookie_from_headers() -> dict | None:
-    """Read the vault_user cookie from the incoming HTTP request headers."""
-    try:
-        cookie_header = st.context.headers.get("cookie", "")
-    except Exception:
-        return None
-
-    if not cookie_header:
-        return None
-
-    sc = SimpleCookie()
-    try:
-        sc.load(cookie_header)
-    except Exception:
-        return None
-
-    morsel = sc.get(_COOKIE_NAME)
-    if not morsel:
-        return None
-
-    try:
-        from urllib.parse import unquote
-        raw_value = unquote(morsel.value)
-        return json.loads(raw_value)
-    except (json.JSONDecodeError, TypeError):
-        return None
-
-
 def set_user_cookie(user_info: dict):
     """Inject JS to store the user info as a browser cookie on the parent page."""
     safe_json = json.dumps(user_info, separators=(",", ":"))
-    # Escape for JS string literal
     safe_json_js = safe_json.replace("\\", "\\\\").replace("'", "\\'")
     js = f"""
     <script>
@@ -144,15 +115,60 @@ def clear_user_cookie():
     st.components.v1.html(js, height=0, width=0)
 
 
+def inject_cookie_restore_script():
+    """
+    Inject JS that reads the cookie from the browser and, if found,
+    redirects to ?vault_restore=<base64> so Python can pick it up.
+    This bypasses st.context.headers which doesn't work on Streamlit Cloud.
+    """
+    js = f"""
+    <script>
+    (function() {{
+        // Only run in the parent frame context
+        try {{
+            var cookies = parent.document.cookie;
+        }} catch(e) {{
+            var cookies = document.cookie;
+        }}
+        var match = cookies.match(/(^|;\\s*){_COOKIE_NAME}=([^;]*)/);
+        if (match) {{
+            var val = decodeURIComponent(match[2]);
+            // base64 encode to safely pass as query param
+            var b64 = btoa(unescape(encodeURIComponent(val)));
+            // Check if we are already on the restore flow or logged in
+            var url = new URL(parent.window.location.href);
+            if (!url.searchParams.has('vault_restore') && !url.searchParams.has('code')) {{
+                url.searchParams.set('vault_restore', b64);
+                parent.window.location.replace(url.toString());
+            }}
+        }}
+    }})();
+    </script>
+    """
+    st.components.v1.html(js, height=0, width=0)
+
+
+def _decode_restore_param(b64_value: str) -> dict | None:
+    """Decode the base64 vault_restore query param back to user info dict."""
+    try:
+        decoded = b64decode(b64_value).decode("utf-8")
+        user = json.loads(decoded)
+        if user.get("email"):
+            return user
+    except Exception:
+        pass
+    return None
+
+
 # ── Main auth flow ──────────────────────────────────────────────────────────
 
 def check_auth():
     """
     Auth flow with cookie persistence:
     1. session_state.user exists → return it
-    2. Cookie 'vault_user' in request → restore to session_state
+    2. ?vault_restore= in URL → decode user from cookie via JS bridge
     3. ?code= in URL → process OAuth, set cookie, store session
-    4. None of the above → return None (show login)
+    4. None → inject JS to check cookie and redirect if found
     """
     # ── Handle delayed cookie injection ──
     _skip_cookie_restore = False
@@ -164,18 +180,20 @@ def check_auth():
     if "clear_cookie_flag" in st.session_state:
         clear_user_cookie()
         del st.session_state["clear_cookie_flag"]
-        _skip_cookie_restore = True  # Don't re-read stale cookie from headers
+        _skip_cookie_restore = True
 
     # 1. Already in session
     if "user" in st.session_state and st.session_state.user is not None:
         return st.session_state.user
 
-    # 2. Restore from cookie (skip if we just cleared it)
-    if not _skip_cookie_restore:
-        cookie_user = _read_cookie_from_headers()
-        if cookie_user and cookie_user.get("email"):
-            st.session_state.user = cookie_user
-            return cookie_user
+    # 2. Restore from cookie via JS bridge (vault_restore query param)
+    if not _skip_cookie_restore and "vault_restore" in st.query_params:
+        b64_value = st.query_params["vault_restore"]
+        user_info = _decode_restore_param(b64_value)
+        if user_info:
+            st.session_state.user = user_info
+            st.query_params.clear()
+            st.rerun()
 
     # 3. OAuth code exchange
     if "code" in st.query_params:
@@ -192,9 +210,12 @@ def check_auth():
 
         if user_info:
             st.session_state.user = user_info
-            # Schedule cookie to be set on next render
             st.session_state.set_cookie_data = user_info
             st.query_params.clear()
             st.rerun()
+
+    # 4. No session, no code, no restore → inject JS to check cookie
+    if not _skip_cookie_restore:
+        inject_cookie_restore_script()
 
     return None
