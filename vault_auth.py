@@ -1,11 +1,15 @@
-"""Google OAuth 2.0 authentication for Vault PropTech with encoding"""
+"""Google OAuth 2.0 authentication for Vault PropTech with cookie persistence"""
+import json
 import os
 import requests
 import streamlit as st
+from http.cookies import SimpleCookie
 from urllib.parse import quote
 
 # ── Fixed redirect URI — must match Google Cloud Console EXACTLY ──
 _DEFAULT_REDIRECT = "https://vault-legal-ai-v1.streamlit.app/"
+_COOKIE_NAME = "vault_user"
+_COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 
 
 def _normalize_uri(uri: str) -> str:
@@ -79,16 +83,101 @@ def get_user_from_code(code, client_id, client_secret, redirect_uri):
     return userinfo_response.json()
 
 
+# ── Cookie helpers ──────────────────────────────────────────────────────────
+
+def _read_cookie_from_headers() -> dict | None:
+    """Read the vault_user cookie from the incoming HTTP request headers."""
+    try:
+        cookie_header = st.context.headers.get("cookie", "")
+    except Exception:
+        return None
+
+    if not cookie_header:
+        return None
+
+    sc = SimpleCookie()
+    try:
+        sc.load(cookie_header)
+    except Exception:
+        return None
+
+    morsel = sc.get(_COOKIE_NAME)
+    if not morsel:
+        return None
+
+    try:
+        from urllib.parse import unquote
+        raw_value = unquote(morsel.value)
+        return json.loads(raw_value)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def set_user_cookie(user_info: dict):
+    """Inject JS to store the user info as a browser cookie on the parent page."""
+    safe_json = json.dumps(user_info, separators=(",", ":"))
+    # Escape for JS string literal
+    safe_json_js = safe_json.replace("\\", "\\\\").replace("'", "\\'")
+    js = f"""
+    <script>
+    try {{
+        parent.document.cookie = "{_COOKIE_NAME}=" + encodeURIComponent('{safe_json_js}') + ";path=/;max-age={_COOKIE_MAX_AGE};SameSite=Lax";
+    }} catch(e) {{
+        document.cookie = "{_COOKIE_NAME}=" + encodeURIComponent('{safe_json_js}') + ";path=/;max-age={_COOKIE_MAX_AGE};SameSite=Lax";
+    }}
+    </script>
+    """
+    st.components.v1.html(js, height=0, width=0)
+
+
+def clear_user_cookie():
+    """Inject JS to delete the user cookie from the browser."""
+    js = f"""
+    <script>
+    try {{
+        parent.document.cookie = "{_COOKIE_NAME}=;path=/;max-age=0;SameSite=Lax";
+    }} catch(e) {{
+        document.cookie = "{_COOKIE_NAME}=;path=/;max-age=0;SameSite=Lax";
+    }}
+    </script>
+    """
+    st.components.v1.html(js, height=0, width=0)
+
+
+# ── Main auth flow ──────────────────────────────────────────────────────────
+
 def check_auth():
     """
-    Main auth flow:
-    - If already logged in (session_state.user), return user.
-    - If ?code=... is in URL, process login, store user, clear URL, return user.
-    - If neither, return None.
+    Auth flow with cookie persistence:
+    1. session_state.user exists → return it
+    2. Cookie 'vault_user' in request → restore to session_state
+    3. ?code= in URL → process OAuth, set cookie, store session
+    4. None of the above → return None (show login)
     """
+    # ── Handle delayed cookie injection ──
+    _skip_cookie_restore = False
+
+    if "set_cookie_data" in st.session_state:
+        set_user_cookie(st.session_state.set_cookie_data)
+        del st.session_state["set_cookie_data"]
+
+    if "clear_cookie_flag" in st.session_state:
+        clear_user_cookie()
+        del st.session_state["clear_cookie_flag"]
+        _skip_cookie_restore = True  # Don't re-read stale cookie from headers
+
+    # 1. Already in session
     if "user" in st.session_state and st.session_state.user is not None:
         return st.session_state.user
 
+    # 2. Restore from cookie (skip if we just cleared it)
+    if not _skip_cookie_restore:
+        cookie_user = _read_cookie_from_headers()
+        if cookie_user and cookie_user.get("email"):
+            st.session_state.user = cookie_user
+            return cookie_user
+
+    # 3. OAuth code exchange
     if "code" in st.query_params:
         code = st.query_params["code"]
 
@@ -103,6 +192,8 @@ def check_auth():
 
         if user_info:
             st.session_state.user = user_info
+            # Schedule cookie to be set on next render
+            st.session_state.set_cookie_data = user_info
             st.query_params.clear()
             st.rerun()
 

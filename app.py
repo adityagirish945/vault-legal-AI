@@ -16,7 +16,7 @@ import streamlit as st
 from llm import ask, get_gemini_client
 from query import query_kb, format_context_for_llm
 from firebase_chat import save_chat, load_chats, load_chat, delete_chat
-from vault_auth import check_auth, get_auth_config, get_login_url
+from vault_auth import check_auth, get_auth_config, get_login_url, clear_user_cookie
 import uuid
 
 # Page config
@@ -117,43 +117,34 @@ header[data-testid="stHeader"] {
     border-bottom: none !important;
 }
 
-/* ── Visit Vault button (top-right) ── */
-.visit-vault {
-    position: fixed;
-    top: 14px;
-    right: 20px;
-    z-index: 999;
-}
-.visit-vault a {
-    display: inline-flex;
+/* ── Visit Vault sidebar button ── */
+.visit-vault-sb a {
+    display: flex;
     align-items: center;
-    gap: 0.35rem;
-    padding: 0.4rem 0.9rem;
-    background: #FFFFFF;
-    color: var(--brand);
-    border: 1px solid var(--border);
-    border-radius: 100px;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
+    background: linear-gradient(135deg, #0C0A93 0%, #4D4BFF 100%);
+    color: #FFFFFF;
+    border: none;
+    border-radius: 10px;
     font-family: 'DM Sans', sans-serif;
-    font-size: 0.76rem;
+    font-size: 0.82rem;
     font-weight: 600;
     text-decoration: none;
-    transition: all 0.2s var(--ease);
-    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    transition: all 0.25s var(--ease);
+    box-shadow: 0 2px 10px rgba(12,10,147,0.2);
     letter-spacing: 0.2px;
 }
-.visit-vault a:hover {
-    background: var(--brand);
-    color: #FFFFFF;
-    border-color: var(--brand);
-    box-shadow: 0 2px 10px rgba(12,10,147,0.2);
+.visit-vault-sb a:hover {
+    background: linear-gradient(135deg, #1a18b8 0%, #6866FF 100%);
+    box-shadow: 0 4px 18px rgba(12,10,147,0.3);
     transform: translateY(-1px);
 }
-.visit-vault a:hover svg { stroke: #FFFFFF; }
-.visit-vault a svg {
-    width: 13px; height: 13px;
-    stroke: var(--brand); stroke-width: 2;
+.visit-vault-sb a svg {
+    width: 14px; height: 14px;
+    stroke: #FFFFFF; stroke-width: 2;
     fill: none;
-    transition: stroke 0.2s var(--ease);
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -861,7 +852,7 @@ with st.sidebar:
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-    # Compact sidebar footer (#7)
+    # Compact sidebar footer
     st.markdown("---")
     st.markdown("""
     <div class="sb-footer">
@@ -877,9 +868,23 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    # Visit Vault button — appealing gradient style
+    st.markdown("""
+    <div class="visit-vault-sb">
+        <a href="https://www.vaultproptech.com/" target="_blank" rel="noopener noreferrer">
+            <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            Visit Vault
+        </a>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Spacer
+    st.markdown('<div style="margin-top: 0.8rem;"></div>', unsafe_allow_html=True)
+
     # Logout button
     st.markdown('<div class="logout-btn">', unsafe_allow_html=True)
     if st.button("Sign Out", use_container_width=True):
+        st.session_state.clear_cookie_flag = True
         st.session_state.user = None
         st.session_state.messages = []
         st.session_state.chat_id = str(uuid.uuid4())
@@ -888,15 +893,6 @@ with st.sidebar:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # Main content
-# Visit Vault button (fixed top-right)
-st.markdown("""
-<div class="visit-vault">
-    <a href="https://www.vaultproptech.com/" target="_blank" rel="noopener noreferrer">
-        Visit Vault
-        <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-    </a>
-</div>
-""", unsafe_allow_html=True)
 
 # Hero — centered brand presentation
 st.markdown(f"""
