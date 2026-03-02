@@ -1,7 +1,8 @@
-"""Google OAuth 2.0 authentication for Vault PropTech."""
+"""Google OAuth 2.0 authentication for Vault PropTech with encoding"""
 import os
 import requests
 import streamlit as st
+from urllib.parse import quote
 
 def get_auth_config():
     """Retrieve Google OAuth credentials from secrets or env."""
@@ -21,7 +22,7 @@ def get_login_url(client_id, redirect_uri):
     auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
     scope = "openid email profile"
     
-    return f"{auth_url}?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&access_type=offline&prompt=consent"
+    return f"{auth_url}?response_type=code&client_id={client_id}&redirect_uri={quote(redirect_uri)}&scope={quote(scope)}&access_type=offline&prompt=consent"
 
 def get_user_from_code(code, client_id, client_secret, redirect_uri):
     """Exchange the authorization code for an email address."""
