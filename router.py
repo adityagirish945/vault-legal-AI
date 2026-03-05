@@ -82,7 +82,7 @@ REASON: [brief explanation]"""
     
     # Map to collections
     collection_map = {
-        "general": [COLLECTION_L1],
+        "general": [COLLECTION_L1,COLLECTION_L2],
         "service": [COLLECTION_L2, COLLECTION_L3],
         "issue": [COLLECTION_L1, COLLECTION_L2, COLLECTION_L3],
     }
