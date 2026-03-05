@@ -12,6 +12,7 @@ from rich.markdown import Markdown
 
 from query import query_kb, format_context_for_llm
 from redis_cache import format_history_context
+from firebase_chat import get_vault_user, format_user_context
 
 console = Console()
 
@@ -33,7 +34,7 @@ def get_gemini_client():
     return genai.Client(api_key=api_key)
 
 
-def ask(kb_dir: str, question: str, chat_history: list = None, user_name: str = None, verbose: bool = True) -> str:
+def ask(kb_dir: str, question: str, chat_history: list = None, user_name: str = None, user_email: str = None, verbose: bool = True) -> str:
     """
     Ask a question and get an LLM-generated answer using RAG.
     
@@ -42,6 +43,7 @@ def ask(kb_dir: str, question: str, chat_history: list = None, user_name: str = 
         question: User's question
         chat_history: Previous messages for context
         user_name: Authenticated user's name for personalized responses
+        user_email: User's email to fetch service context
         verbose: Whether to print rich output
         
     Returns:
@@ -60,8 +62,14 @@ def ask(kb_dir: str, question: str, chat_history: list = None, user_name: str = 
     # Personalization line
     user_line = f"\nThe user's name is {user_name}. Address them by name when appropriate to make the interaction feel personal and warm." if user_name else ""
     
+    # User service context
+    user_context = ""
+    if user_email:
+        vault_user = get_vault_user(user_email)
+        user_context = format_user_context(vault_user)
+    
     # Build prompt
-    prompt = f"""You are a knowledgeable legal assistant specializing in property documentation and legal services in Bangalore, Karnataka, India. You work for Vault PropTech, a trusted property services company.{user_line}
+    prompt = f"""You are a knowledgeable legal assistant specializing in property documentation and legal services in Bangalore, Karnataka, India. You work for Vault PropTech, a trusted property services company.{user_line}{user_context}
 
 Your role:
 - speech : FIRST PERSON - you are an ACTUAL PERSON to the user
@@ -81,6 +89,8 @@ for the prompt : "Is e khata required for MODT cancellation" : specifically core
 - IF THERE IS SOMETHING IN THE OUTPUT THAT IS VAULT RELATED(as in how vault can help/what vault is/etc. - anything vault related) - make sure that it is noticible in the answer
 pivot to vault as the hero of the message - for better user attraction (don't use the words "hero" explicitly tho) - and give them the link : "https://www.vaultproptech.com/contact-us" hyperlink, telling them they can reach out to us here
 
+
+- IF ANY UNRELATED QUERY IS IDENTIFIED, RESPOND WITH : "This query is outside my scope. I can assist only with legal and property-related questions."
 
 Guidelines:
 - Answer based strictly on the provided context below
