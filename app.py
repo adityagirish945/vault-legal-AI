@@ -696,11 +696,39 @@ div[data-testid="stAlert"] {
    FOOTER
    ═══════════════════════════════════════════════════════ */
 .vault-footer {
-    text-align: center; padding: 1rem 0 0.5rem 0;
-    font-size: 0.7rem; color: var(--text-3); letter-spacing: 0.3px;
+    text-align: center;
+    padding: 2rem 1rem 1rem 1rem;
+    max-width: 720px;
+    margin: 0 auto;
 }
-.vault-footer .vf-brand { color: var(--brand); font-weight: 600; }
-.vault-footer .vf-sep { margin: 0 0.5rem; opacity: 0.3; }
+.vault-footer .vf-copyright {
+    font-size: 0.75rem;
+    color: var(--text-3);
+    letter-spacing: 0.3px;
+    margin-bottom: 1rem;
+}
+.vault-footer .vf-brand {
+    color: var(--brand);
+    font-weight: 600;
+}
+.vault-footer .vf-sep {
+    margin: 0 0.5rem;
+    opacity: 0.3;
+}
+.vault-footer .vf-disclaimer {
+    font-size: 0.7rem;
+    color: var(--text-3);
+    line-height: 1.6;
+    padding: 0.8rem 1rem;
+    background: rgba(12,10,147,0.02);
+    border: 1px solid rgba(12,10,147,0.08);
+    border-radius: 8px;
+    text-align: center;
+}
+.vault-footer .vf-disclaimer strong {
+    color: var(--text-2);
+    font-weight: 600;
+}
 
 .main hr { border-color: var(--border) !important; margin-top: 1rem !important; margin-bottom: 0 !important; }
 
@@ -1055,11 +1083,19 @@ if prompt := st.chat_input("Ask your question here..."):
 
 # Footer
 st.markdown("---")
-st.markdown(
-    "<div class='vault-footer'>"
-    "© 2026 <span class='vf-brand'>Vault PropTech</span>"
-    "<span class='vf-sep'>·</span>"
-    "Bengaluru, Karnataka"
-    "</div>",
-    unsafe_allow_html=True
-)
+st.markdown("""
+<div class='vault-footer'>
+    <div class='vf-copyright'>
+        © 2026 <span class='vf-brand'>Vault PropTech</span>
+        <span class='vf-sep'>·</span>
+        Bengaluru, Karnataka
+    </div>
+    <div class='vf-disclaimer'>
+        <strong>Disclaimer:</strong> This platform provides information for informational purposes only and 
+        does not constitute professional legal advice.
+        <br>
+        For accurate legal guidance tailored to your situation, 
+        please consult a qualified legal professional - preferably through Vault.
+    </div>
+</div>
+""", unsafe_allow_html=True)
