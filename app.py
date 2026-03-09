@@ -15,9 +15,17 @@ import os
 import streamlit as st
 from llm import ask, get_gemini_client
 from query import query_kb, format_context_for_llm
-from firebase_chat import save_chat, load_chats, load_chat, delete_chat
+from firebase_chat import save_chat, load_chats, load_chat, delete_chat, save_draft, get_draft
 from vault_auth import check_auth, get_auth_config, get_login_url, clear_user_cookie
+from drive_manager import upload_file, extract_text_with_gemini, export_to_google_doc, list_user_files
 import uuid
+import io
+import re
+import markdown as md_lib
+from docx import Document as DocxDocument
+from docx.shared import Pt, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from fpdf import FPDF
 
 # Page config
 st.set_page_config(
@@ -821,6 +829,172 @@ div[data-testid="stToast"] {
     color: #EF4444 !important;
     border-color: rgba(239,68,68,0.2) !important;
 }
+
+/* ═══════════════════════════════════════════════════════
+   DRAFT CANVAS — Isolated document panel
+   ═══════════════════════════════════════════════════════ */
+.draft-canvas {
+    border: 2px solid var(--brand);
+    border-radius: var(--radius-lg);
+    margin: 1.2rem 0;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(12,10,147,0.08);
+    animation: canvasSlideIn 0.5s var(--ease);
+}
+@keyframes canvasSlideIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.draft-canvas-header {
+    background: linear-gradient(135deg, #0C0A93 0%, #1a18b8 100%);
+    padding: 0.8rem 1.2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.draft-canvas-header .deed-badge {
+    background: rgba(255,255,255,0.15);
+    color: #FFFFFF;
+    padding: 0.3rem 0.8rem;
+    border-radius: 100px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.draft-canvas-header .draft-meta {
+    color: rgba(255,255,255,0.6);
+    font-size: 0.68rem;
+}
+.draft-canvas-content {
+    padding: 2rem 2.5rem;
+    background: #FFFFFF;
+    max-height: 70vh;
+    overflow-y: auto;
+    line-height: 1.8;
+    font-size: 0.92rem;
+    color: var(--text);
+}
+.draft-canvas-content h1, .draft-canvas-content h2, .draft-canvas-content h3 {
+    color: var(--text) !important;
+    display: block !important;
+    font-weight: 700 !important;
+    margin-top: 1.2rem !important;
+    margin-bottom: 0.5rem !important;
+}
+.draft-canvas-content h1 { font-size: 1.2rem !important; }
+.draft-canvas-content h2 { font-size: 1.05rem !important; }
+.draft-canvas-content h3 { font-size: 0.95rem !important; }
+.draft-canvas-actions {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 0.6rem 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+/* Export / download button styling */
+.export-btn button, .download-btn button {
+    background: linear-gradient(135deg, #0C0A93 0%, #4D4BFF 100%) !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.78rem !important;
+    padding: 0.4rem 1rem !important;
+    box-shadow: 0 2px 8px rgba(12,10,147,0.2) !important;
+    transition: all 0.25s var(--ease) !important;
+}
+.export-btn button:hover, .download-btn button:hover {
+    background: linear-gradient(135deg, #1a18b8 0%, #6866FF 100%) !important;
+    box-shadow: 0 4px 14px rgba(12,10,147,0.3) !important;
+    transform: translateY(-1px) !important;
+}
+
+/* ── File Upload Section ── */
+.file-upload-section {
+    margin: 0.8rem 0;
+    padding: 0.8rem;
+    background: var(--surface);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+}
+.file-upload-section .upload-label {
+    font-size: 0.72rem;
+    color: var(--text-3);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 0.4rem;
+}
+.uploaded-files-list {
+    font-size: 0.78rem;
+    color: var(--text-2);
+}
+.uploaded-files-list .file-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0;
+}
+.uploaded-files-list .file-item a {
+    color: var(--brand) !important;
+    text-decoration: none;
+    font-weight: 500;
+}
+/* ═══════════════════════════════════════════════════════
+   FREE USER CTA BANNER & LOCKED CANVAS
+   ═══════════════════════════════════════════════════════ */
+.free-cta-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.8rem;
+    padding: 0.7rem 1.2rem;
+    margin: 0 auto 1rem auto;
+    max-width: 720px;
+    background: linear-gradient(135deg, rgba(12,10,147,0.04) 0%, rgba(77,75,255,0.06) 100%);
+    border: 1px solid rgba(12,10,147,0.12);
+    border-radius: 12px;
+    font-size: 0.82rem;
+    color: var(--text-2);
+    animation: ctaFadeIn 0.6s var(--ease);
+}
+@keyframes ctaFadeIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.cta-login-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 1rem;
+    background: linear-gradient(135deg, #0C0A93 0%, #4D4BFF 100%);
+    color: #FFFFFF !important;
+    border-radius: 100px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.25s var(--ease);
+    box-shadow: 0 2px 8px rgba(12,10,147,0.2);
+    white-space: nowrap;
+}
+.cta-login-btn:hover {
+    background: linear-gradient(135deg, #1a18b8 0%, #6866FF 100%);
+    box-shadow: 0 4px 14px rgba(12,10,147,0.3);
+    transform: translateY(-1px);
+}
+.cta-login-btn img {
+    width: 14px;
+    height: 14px;
+}
+.draft-canvas-actions.locked {
+    justify-content: center;
+    padding: 0.8rem 1.2rem;
+    font-size: 0.82rem;
+    color: var(--text-2);
+    gap: 0.8rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -831,152 +1005,213 @@ if "chat_id" not in st.session_state:
     st.session_state.chat_id = str(uuid.uuid4())
 if "chat_name" not in st.session_state:
     st.session_state.chat_name = "New Chat"
+if "drafting_mode" not in st.session_state:
+    st.session_state.drafting_mode = False
+if "current_deed_type" not in st.session_state:
+    st.session_state.current_deed_type = ""
+if "draft_content" not in st.session_state:
+    st.session_state.draft_content = ""
+if "uploaded_docs_context" not in st.session_state:
+    st.session_state.uploaded_docs_context = ""
+if "uploaded_files_info" not in st.session_state:
+    st.session_state.uploaded_files_info = []
 
 # ═══════════════════════════════════════════════════════
-# AUTH GATE — Check Google OAuth before rendering anything
+# AUTH CHECK — Soft gate (anonymous users can still chat)
 # ═══════════════════════════════════════════════════════
 user = check_auth()
+is_logged_in = user is not None
 
-if user is None:
-    # ── Login Page ──
-    client_id, client_secret, redirect_uri = get_auth_config()
-    login_url = get_login_url(client_id, redirect_uri) if client_id else "#"
-    
-    st.markdown(f"""
-    <div class="login-page">
-        <div class="login-card">
+# Generate login URL (needed for both CTA banner and sidebar)
+client_id, client_secret, redirect_uri = get_auth_config()
+login_url = get_login_url(client_id, redirect_uri) if client_id else "#"
+
+# ── Derive user info safely ──
+if is_logged_in:
+    user_email = user.get("email", "")
+    user_name = user.get("name", "User")
+    user_picture = user.get("picture", "")
+
+    # On-login migration: push any anonymous session messages to Firebase
+    if st.session_state.get("_was_anonymous") and st.session_state.messages:
+        save_chat(user_email, user_name, st.session_state.chat_id,
+                  st.session_state.messages, st.session_state.chat_name)
+        if st.session_state.draft_content:
+            save_draft(user_email, user_name, st.session_state.chat_id,
+                       st.session_state.draft_content,
+                       st.session_state.current_deed_type,
+                       "Migrated from free session",
+                       st.session_state.chat_name)
+        st.session_state.pop("_was_anonymous", None)
+        st.toast("✅ Your conversation has been saved!")
+else:
+    user_email = ""
+    user_name = ""
+    user_picture = ""
+    # Mark this session as anonymous so we can migrate on login
+    if "_was_anonymous" not in st.session_state:
+        st.session_state["_was_anonymous"] = True
+
+# Sidebar — logged-in users only
+if is_logged_in:
+    with st.sidebar:
+        st.title("Vault PropTech")  # Hidden by CSS
+
+        # Brand header — indigo banner at top
+        st.markdown(f"""
+        <div class="sb-header">
             {VAULT_LOGO_SVG}
-            <h2>Vault Legal Assistant</h2>
-            <p>Property documentation & legal guidance<br>Exclusively in Bengaluru</p>
-            <a href="{login_url}" class="google-btn">
-                <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google">
-                Sign in with Google
-            </a>
-            <div class="login-footer">
-                Secure sign-in powered by Google OAuth<br>
-                Your data stays private and encrypted
+            <div class="sb-header-label">Legal Assistant</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # User greeting
+        st.markdown(f"""
+        <div class="user-greeting">
+            <img src="{user_picture}" alt="" referrerpolicy="no-referrer">
+            <div>
+                <div class="ug-name">{user_name}</div>
+                <div class="ug-email">{user_email}</div>
             </div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.stop()
+        """, unsafe_allow_html=True)
 
-# ── User is authenticated — extract info ──
-user_email = user.get("email", "")
-user_name = user.get("name", "User")
-user_picture = user.get("picture", "")
+        st.markdown('<div class="new-chat-btn">', unsafe_allow_html=True)
+        if st.button("New Chat", use_container_width=True):
+            st.session_state.messages = []
+            st.session_state.chat_id = str(uuid.uuid4())
+            st.session_state.chat_name = "New Chat"
+            st.session_state.drafting_mode = False
+            st.session_state.current_deed_type = ""
+            st.session_state.draft_content = ""
+            st.session_state.uploaded_docs_context = ""
+            st.session_state.uploaded_files_info = []
+            st.toast("New conversation started")
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# Sidebar
-with st.sidebar:
-    st.title("Vault PropTech")  # Hidden by CSS
+        st.markdown("---")
+        st.subheader("Chat History")
 
-    # Brand header — indigo banner at top
-    st.markdown(f"""
-    <div class="sb-header">
-        {VAULT_LOGO_SVG}
-        <div class="sb-header-label">Legal Assistant</div>
-    </div>
-    """, unsafe_allow_html=True)
+        chats = load_chats(user_email)
 
-    # User greeting
-    st.markdown(f"""
-    <div class="user-greeting">
-        <img src="{user_picture}" alt="" referrerpolicy="no-referrer">
-        <div>
-            <div class="ug-name">{user_name}</div>
-            <div class="ug-email">{user_email}</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+        if not chats:
+            st.markdown(
+                "<p style='color:#9CA3AF; font-size:0.78rem; padding:0.3rem 0; font-style:italic;'>No conversations yet</p>",
+                unsafe_allow_html=True,
+            )
 
-    st.markdown('<div class="new-chat-btn">', unsafe_allow_html=True)
-    if st.button("New Chat", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.chat_id = str(uuid.uuid4())
-        st.session_state.chat_name = "New Chat"
-        st.toast("New conversation started")
-        st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown("---")
-    st.subheader("Chat History")
-
-    chats = load_chats(user_email)
-
-    if not chats:
-        st.markdown(
-            "<p style='color:#9CA3AF; font-size:0.78rem; padding:0.3rem 0; font-style:italic;'>No conversations yet</p>",
-            unsafe_allow_html=True,
-        )
-
-    for chat in chats:
-        is_active = chat["chat_id"] == st.session_state.chat_id
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            if is_active:
-                st.markdown('<div class="chat-active">', unsafe_allow_html=True)
-            if st.button(chat["chat_name"], key=chat["chat_id"], use_container_width=True):
-                loaded = load_chat(user_email, chat["chat_id"])
-                if loaded:
-                    st.session_state.messages = loaded["messages"]
-                    st.session_state.chat_id = chat["chat_id"]
-                    st.session_state.chat_name = chat["chat_name"]
+        for chat in chats:
+            is_active = chat["chat_id"] == st.session_state.chat_id
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                if is_active:
+                    st.markdown('<div class="chat-active">', unsafe_allow_html=True)
+                if st.button(chat["chat_name"], key=chat["chat_id"], use_container_width=True):
+                    loaded = load_chat(user_email, chat["chat_id"])
+                    if loaded:
+                        st.session_state.messages = loaded["messages"]
+                        st.session_state.chat_id = chat["chat_id"]
+                        st.session_state.chat_name = chat["chat_name"]
+                        # Restore draft state if this chat has a draft
+                        draft_msg = None
+                        for m in loaded["messages"]:
+                            if m.get("role") == "draft":
+                                draft_msg = m
+                                break
+                        if draft_msg:
+                            st.session_state.drafting_mode = True
+                            st.session_state.draft_content = draft_msg.get("content", "")
+                            st.session_state.current_deed_type = draft_msg.get("deed_type", "")
+                        else:
+                            st.session_state.drafting_mode = False
+                            st.session_state.draft_content = ""
+                            st.session_state.current_deed_type = ""
+                        st.rerun()
+                if is_active:
+                    st.markdown('</div>', unsafe_allow_html=True)
+            with col2:
+                st.markdown('<div class="del-btn">', unsafe_allow_html=True)
+                if st.button("\u2715", key=f"del_{chat['chat_id']}"):
+                    delete_chat(user_email, chat["chat_id"])
+                    if chat["chat_id"] == st.session_state.chat_id:
+                        st.session_state.messages = []
+                        st.session_state.chat_id = str(uuid.uuid4())
+                        st.session_state.chat_name = "New Chat"
+                    st.toast("Chat deleted")
                     st.rerun()
-            if is_active:
                 st.markdown('</div>', unsafe_allow_html=True)
-        with col2:
-            st.markdown('<div class="del-btn">', unsafe_allow_html=True)
-            if st.button("\u2715", key=f"del_{chat['chat_id']}"):
-                delete_chat(user_email, chat["chat_id"])
-                if chat["chat_id"] == st.session_state.chat_id:
-                    st.session_state.messages = []
-                    st.session_state.chat_id = str(uuid.uuid4())
-                    st.session_state.chat_name = "New Chat"
-                st.toast("Chat deleted")
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
 
-    # Compact sidebar footer
-    st.markdown("---")
-    st.markdown("""
-    <div class="sb-footer">
-        <strong>Vault PropTech</strong> · Property legal services, Bengaluru
-        <div class="sf-row">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
-            +91 88619 50376
+        # Compact sidebar footer
+        st.markdown("---")
+        st.markdown("""
+        <div class="sb-footer">
+            <strong>Vault PropTech</strong> · Property legal services, Bengaluru
+            <div class="sf-row">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+                +91 88619 50376
+            </div>
+            <div class="sf-row">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                info@vaultproptech.com
+            </div>
         </div>
-        <div class="sf-row">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-            info@vaultproptech.com
+        """, unsafe_allow_html=True)
+
+        st.markdown('<div style="margin-top: 1.2rem;"></div>', unsafe_allow_html=True)
+
+        # Visit Vault button — appealing gradient style
+        st.markdown("""
+        <div class="visit-vault-sb">
+            <a href="https://www.vaultproptech.com/" target="_blank" rel="noopener noreferrer">
+                <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                Visit Vault
+            </a>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
-    st.markdown('<div style="margin-top: 1.2rem;"></div>', unsafe_allow_html=True)
+        # Spacer
+        st.markdown('<div style="margin-top: 1.8rem;"></div>', unsafe_allow_html=True)
 
-    # Visit Vault button — appealing gradient style
-    st.markdown("""
-    <div class="visit-vault-sb">
-        <a href="https://www.vaultproptech.com/" target="_blank" rel="noopener noreferrer">
-            <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-            Visit Vault
-        </a>
-    </div>
-    """, unsafe_allow_html=True)
+        # Show uploaded files count if any (compact indicator in sidebar)
+        if st.session_state.uploaded_files_info:
+            count = len(st.session_state.uploaded_files_info)
+            st.markdown("---")
+            st.markdown(
+                f'<p style="color:var(--text-3); font-size:0.72rem; font-weight:600;">'
+                f'📎 {count} document{"s" if count > 1 else ""} attached</p>',
+                unsafe_allow_html=True,
+            )
+            for f_info in st.session_state.uploaded_files_info:
+                link = f_info.get("web_view_link", "")
+                name = f_info.get("filename", "file")
+                if link:
+                    st.markdown(
+                        f'<div class="file-item">📄 <a href="{link}" target="_blank" '
+                        f'style="color:var(--brand);text-decoration:none;font-size:0.72rem;">{name}</a></div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f'<div class="file-item" style="font-size:0.72rem;">📄 {name}</div>',
+                        unsafe_allow_html=True,
+                    )
 
-    # Spacer
-    st.markdown('<div style="margin-top: 1.8rem;"></div>', unsafe_allow_html=True)
-
-    # Logout button
-    st.markdown('<div class="logout-btn">', unsafe_allow_html=True)
-    if st.button("Sign Out", use_container_width=True):
-        st.session_state.clear_cookie_flag = True
-        st.session_state.user = None
-        st.session_state.messages = []
-        st.session_state.chat_id = str(uuid.uuid4())
-        st.session_state.chat_name = "New Chat"
-        st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
+        # Logout button
+        st.markdown('<div class="logout-btn">', unsafe_allow_html=True)
+        if st.button("Sign Out", use_container_width=True):
+            st.session_state.clear_cookie_flag = True
+            st.session_state.user = None
+            st.session_state.messages = []
+            st.session_state.chat_id = str(uuid.uuid4())
+            st.session_state.chat_name = "New Chat"
+            st.session_state.drafting_mode = False
+            st.session_state.draft_content = ""
+            st.session_state.current_deed_type = ""
+            st.session_state.uploaded_docs_context = ""
+            st.session_state.uploaded_files_info = []
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # Main content
 
@@ -988,6 +1223,18 @@ st.markdown(f"""
     <p>Property documentation & legal guidance · Exclusively in Bengaluru</p>
 </div>
 """, unsafe_allow_html=True)
+
+# Free-user CTA banner
+if not is_logged_in:
+    st.markdown(f"""
+    <div class="free-cta-bar">
+        <b>SIGN IN</b>to save chats, export drafts, and upload documents.
+        <a href="{login_url}" class="cta-login-btn">
+            <img src="https://developers.google.com/identity/images/g-logo.png" alt="">
+            Sign In
+        </a>
+    </div>
+    """, unsafe_allow_html=True)
 
 # Empty state with CLICKABLE suggestion chips (#2)
 if not st.session_state.messages:
@@ -1009,71 +1256,339 @@ if not st.session_state.messages:
                 st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
-# Display chat messages
+# ═══════════════════════════════════════════════════════
+# HELPERS — Generate downloadable PDF / DOCX from draft
+# ═══════════════════════════════════════════════════════
+
+def _strip_md(text: str) -> str:
+    """Return plain text from Markdown (best-effort)."""
+    text = re.sub(r'#{1,6}\s*', '', text)          # headings
+    text = re.sub(r'\*{1,2}(.+?)\*{1,2}', r'\1', text)  # bold/italic
+    text = re.sub(r'[-*]\s+', '- ', text)            # bullets
+    text = text.encode('latin-1', errors='replace').decode('latin-1')  # safe for PDF
+    return text.strip()
+
+
+def _generate_pdf(content: str, deed_type: str) -> bytes:
+    """Create a simple PDF from Markdown draft content."""
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+    pdf.set_font('Helvetica', 'B', 16)
+    title = deed_type.replace('_', ' ').title()
+    pdf.cell(0, 12, title, ln=True, align='C')
+    pdf.ln(6)
+    pdf.set_font('Helvetica', '', 11)
+    plain = _strip_md(content)
+    for line in plain.split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            pdf.ln(4)
+            continue
+        pdf.multi_cell(0, 6, stripped)
+        pdf.ln(2)
+    return bytes(pdf.output())
+
+
+def _generate_docx(content: str, deed_type: str) -> bytes:
+    """Create a DOCX from Markdown draft content."""
+    doc = DocxDocument()
+    title = deed_type.replace('_', ' ').title()
+    heading = doc.add_heading(title, level=0)
+    heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    plain = _strip_md(content)
+    for line in plain.split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        p = doc.add_paragraph(stripped)
+        for run in p.runs:
+            run.font.size = Pt(11)
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+# ═══════════════════════════════════════════════════════
+# DRAFT CANVAS — Render if a draft exists
+# ═══════════════════════════════════════════════════════
+if st.session_state.draft_content:
+    deed_display = st.session_state.current_deed_type.replace('_', ' ').title()
+    st.markdown(f"""
+    <div class="draft-canvas">
+        <div class="draft-canvas-header">
+            <span class="deed-badge">📜 {deed_display}</span>
+            <span class="draft-meta">Live Draft • Editable</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Render draft content as markdown inside a styled container
+    with st.container():
+        st.markdown(
+            f'<div class="draft-canvas-content">', unsafe_allow_html=True
+        )
+        st.markdown(st.session_state.draft_content)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # Action buttons — logged-in users get full controls, free users see locked prompt
+    if is_logged_in:
+        st.markdown('<div class="draft-canvas-actions">', unsafe_allow_html=True)
+        col_pdf, col_word, col_export, col_link = st.columns([1, 1, 1, 2])
+
+        # ── Download as PDF ──
+        with col_pdf:
+            st.markdown('<div class="download-btn">', unsafe_allow_html=True)
+            pdf_bytes = _generate_pdf(
+                st.session_state.draft_content,
+                st.session_state.current_deed_type,
+            )
+            deed_slug = st.session_state.current_deed_type.replace(' ', '_')
+            st.download_button(
+                label="⬇ Download PDF",
+                data=pdf_bytes,
+                file_name=f"Vault_Draft_{deed_slug}.pdf",
+                mime="application/pdf",
+                key="dl_pdf",
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Download as Word ──
+        with col_word:
+            st.markdown('<div class="download-btn">', unsafe_allow_html=True)
+            docx_bytes = _generate_docx(
+                st.session_state.draft_content,
+                st.session_state.current_deed_type,
+            )
+            st.download_button(
+                label="⬇ Download Word",
+                data=docx_bytes,
+                file_name=f"Vault_Draft_{deed_slug}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="dl_docx",
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Export to Google Doc ──
+        with col_export:
+            st.markdown('<div class="export-btn">', unsafe_allow_html=True)
+            if st.button("📄 Export to Google Doc", key="export_doc"):
+                user_token = st.session_state.get("user_token", "")
+                if not user_token:
+                    st.warning("Please sign out and sign in again to enable Google Docs export.")
+                else:
+                    deed_display_name = st.session_state.current_deed_type.replace('_', ' ').title()
+                    doc_title = f"Vault Draft - {deed_display_name}"
+                    try:
+                        with st.spinner("Creating Google Doc..."):
+                            doc_url = export_to_google_doc(
+                                doc_title,
+                                st.session_state.draft_content,
+                                user_token,
+                            )
+                        st.session_state.exported_doc_url = doc_url
+                        save_draft(
+                            user_email, user_name, st.session_state.chat_id,
+                            st.session_state.draft_content,
+                            st.session_state.current_deed_type,
+                            f"Exported to Google Doc",
+                            st.session_state.chat_name,
+                            doc_link=doc_url,
+                        )
+                        st.toast("✅ Google Doc created!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Export failed: {e}")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Show the Google Doc link if one exists
+        with col_link:
+            doc_url = st.session_state.get("exported_doc_url", "")
+            if doc_url:
+                st.link_button("🔗 Open Google Doc", doc_url, type="primary")
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        # Free user — locked actions with sign-in prompt
+        st.markdown(f"""
+        <div class="draft-canvas-actions locked">
+            🔒 Sign in to download or export this draft.
+            <a href="{login_url}" class="cta-login-btn">
+                <img src="https://developers.google.com/identity/images/g-logo.png" alt="">
+                Sign In
+            </a>
+        </div>
+        """, unsafe_allow_html=True)
+
+# Display chat messages (skip draft messages — they show in the canvas)
 for message in st.session_state.messages:
-    avatar = VAULT_MARK_DATA_URI if message["role"] == "assistant" else user_picture
+    if message.get("role") == "draft":
+        continue  # Rendered in canvas above
+    avatar = VAULT_MARK_DATA_URI if message["role"] == "assistant" else (user_picture or None)
     with st.chat_message(message["role"], avatar=avatar):
         st.markdown(message["content"])
 
+# ═══════════════════════════════════════════════════════
+# RESPONSE GENERATION — Handles both standard and drafting flows
+# ═══════════════════════════════════════════════════════
+
+def _handle_response(prompt_text):
+    """Process a user message and generate a response (standard or drafting)."""
+    kb_dir = os.path.dirname(os.path.abspath(__file__))
+
+    result = ask(
+        kb_dir, prompt_text,
+        st.session_state.messages,
+        user_name=user_name,
+        user_email=user_email,
+        uploaded_docs_context=st.session_state.uploaded_docs_context,
+        existing_draft=st.session_state.draft_content,
+        verbose=False,
+    )
+
+    if isinstance(result, dict):
+        # Drafting response — update canvas and save draft
+        st.session_state.drafting_mode = True
+        st.session_state.draft_content = result["draft"]
+        st.session_state.current_deed_type = result["deed_type"]
+
+        # Save draft to Firebase (logged-in only)
+        if is_logged_in:
+            save_draft(
+                user_email, user_name, st.session_state.chat_id,
+                result["draft"],
+                result["deed_type"],
+                result["summary"],
+                st.session_state.chat_name,
+            )
+
+        # Add the short assistant message to chat
+        assistant_msg = result["assistant_message"]
+        st.session_state.messages.append({"role": "assistant", "content": assistant_msg})
+        if is_logged_in:
+            save_chat(user_email, user_name, st.session_state.chat_id,
+                      st.session_state.messages, st.session_state.chat_name)
+
+        return assistant_msg
+    else:
+        # Standard response
+        st.session_state.messages.append({"role": "assistant", "content": result})
+        if is_logged_in:
+            save_chat(user_email, user_name, st.session_state.chat_id,
+                      st.session_state.messages, st.session_state.chat_name)
+        return result
+
+
 # If last message is user (just asked), auto-trigger the response
-if st.session_state.messages and st.session_state.messages[-1]["role"] == "user" and not any(m["role"] == "assistant" for i, m in enumerate(st.session_state.messages) if i == len(st.session_state.messages) - 1):
-    # Check if there's no assistant response for the last user message
+if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+    # Check there's no assistant response right after
     needs_response = True
     if len(st.session_state.messages) >= 2 and st.session_state.messages[-1]["role"] != "user":
         needs_response = False
 
-    if needs_response and st.session_state.messages[-1]["role"] == "user":
+    if needs_response:
         last_prompt = st.session_state.messages[-1]["content"]
         with st.chat_message("assistant", avatar=VAULT_MARK_DATA_URI):
-            # Typing indicator (#4)
             typing_placeholder = st.empty()
             typing_placeholder.markdown(
                 '<div class="typing-indicator"><span></span><span></span><span></span></div>',
                 unsafe_allow_html=True
             )
-
-            kb_dir = os.path.dirname(os.path.abspath(__file__))
             try:
-                answer = ask(kb_dir, last_prompt, st.session_state.messages, user_name=user_name, verbose=False)
+                answer = _handle_response(last_prompt)
                 typing_placeholder.empty()
                 st.markdown(answer)
-                st.session_state.messages.append({"role": "assistant", "content": answer})
-
-                save_chat(user_email, user_name, st.session_state.chat_id, st.session_state.messages, st.session_state.chat_name)
-
+                # If drafting, rerun to show the canvas
+                if st.session_state.drafting_mode:
+                    st.rerun()
             except Exception as e:
                 typing_placeholder.empty()
                 error_msg = f"I encountered an error: {str(e)}\n\nPlease make sure:\n1. The knowledge base is ingested (`python setup.py ingest`)\n2. Your GEMINI_API_KEY is set in .env"
                 st.error(error_msg)
                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
-# Chat input (normal flow)
+# ═══════════════════════════════════════════════════════
+# FILE UPLOAD — logged-in users only
+# ═══════════════════════════════════════════════════════
+if is_logged_in:
+    with st.expander("📎 Attach documents (PDF / Image)", expanded=False):
+        st.markdown(
+            '<p style="color:#9CA3AF; font-size:0.78rem; margin:0 0 0.5rem 0;">'
+            'Upload previous deeds, Aadhaar/PAN, E-Khata, or property tax receipts. '
+            'Uploading a document will enter legal drafting mode.</p>',
+            unsafe_allow_html=True,
+        )
+        uploaded_file = st.file_uploader(
+            "Upload PDF or Image",
+            type=["pdf", "png", "jpg", "jpeg", "tiff", "bmp"],
+            key="doc_uploader",
+            label_visibility="collapsed",
+        )
+        if uploaded_file is not None:
+            file_bytes = uploaded_file.read()
+            mime_type = uploaded_file.type or "application/octet-stream"
+
+            # Auto-enter drafting mode on file upload
+            if not st.session_state.drafting_mode:
+                st.session_state.drafting_mode = True
+                if not st.session_state.current_deed_type:
+                    st.session_state.current_deed_type = "legal_document"
+
+            deed_name = st.session_state.current_deed_type or "legal_document"
+
+            with st.spinner("Uploading to Drive..."):
+                try:
+                    result = upload_file(
+                        user_email, deed_name,
+                        file_bytes, uploaded_file.name, mime_type
+                    )
+                    st.toast(f"✅ Uploaded: {uploaded_file.name}")
+                    st.session_state.uploaded_files_info.append(result)
+                except Exception as e:
+                    st.error(f"Upload failed: {e}")
+                    result = None
+
+            # Extract text using Gemini 2.5 Flash OCR
+            if result:
+                with st.spinner("Reading document with Gemini OCR..."):
+                    extracted = extract_text_with_gemini(file_bytes, mime_type, uploaded_file.name)
+                    st.session_state.uploaded_docs_context += (
+                        f"\n\n--- {uploaded_file.name} ---\n{extracted}\n"
+                    )
+                st.rerun()
+
+        # Show uploaded files inline
+        if st.session_state.uploaded_files_info:
+            for f_info in st.session_state.uploaded_files_info:
+                link = f_info.get("web_view_link", "")
+                name = f_info.get("filename", "file")
+                if link:
+                    st.markdown(f"📄 [{name}]({link})")
+                else:
+                    st.markdown(f"📄 {name}")
+
+# Chat input
 if prompt := st.chat_input("Ask your question here..."):
     if st.session_state.chat_name == "New Chat":
         st.session_state.chat_name = prompt[:20] + ("..." if len(prompt) > 20 else "")
 
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user", avatar=user_picture):
+    with st.chat_message("user", avatar=(user_picture or None)):
         st.markdown(prompt)
 
     with st.chat_message("assistant", avatar=VAULT_MARK_DATA_URI):
-        # Typing indicator (#4)
         typing_placeholder = st.empty()
         typing_placeholder.markdown(
             '<div class="typing-indicator"><span></span><span></span><span></span></div>',
             unsafe_allow_html=True
         )
 
-        kb_dir = os.path.dirname(os.path.abspath(__file__))
-
         try:
-            answer = ask(kb_dir, prompt, st.session_state.messages, user_name=user_name, verbose=False)
+            answer = _handle_response(prompt)
             typing_placeholder.empty()
             st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
-
-            save_chat(user_email, user_name, st.session_state.chat_id, st.session_state.messages, st.session_state.chat_name)
-
+            # If drafting, rerun to show/update the canvas
+            if st.session_state.drafting_mode:
+                st.rerun()
         except Exception as e:
             typing_placeholder.empty()
             error_msg = f"I encountered an error: {str(e)}\n\nPlease make sure:\n1. The knowledge base is ingested (`python setup.py ingest`)\n2. Your GEMINI_API_KEY is set in .env"

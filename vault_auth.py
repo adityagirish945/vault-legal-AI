@@ -37,7 +37,7 @@ def get_auth_config():
 def get_login_url(client_id, redirect_uri):
     """Generate the Google OAuth login URL."""
     auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
-    scope = "openid email profile"
+    scope = "openid email profile https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file"
 
     return (
         f"{auth_url}"
@@ -80,7 +80,9 @@ def get_user_from_code(code, client_id, client_secret, redirect_uri):
         st.error(f"Failed to get user info: {userinfo_response.text}")
         return None
 
-    return userinfo_response.json()
+    # Store access token for Google Docs export
+    access_token = token_response.json().get("access_token")
+    return userinfo_response.json(), access_token
 
 
 # ── Cookie helpers ──────────────────────────────────────────────────────────
@@ -219,10 +221,12 @@ def check_auth():
             return None
 
         with st.spinner("Signing you in..."):
-            user_info = get_user_from_code(code, client_id, client_secret, redirect_uri)
+            result = get_user_from_code(code, client_id, client_secret, redirect_uri)
 
-        if user_info:
+        if result:
+            user_info, access_token = result
             st.session_state.user = user_info
+            st.session_state.user_token = access_token  # For Google Docs export
             st.session_state.set_cookie_data = user_info
             st.query_params.clear()
             st.rerun()

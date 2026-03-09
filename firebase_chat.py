@@ -1,9 +1,13 @@
-"""Firebase chat history management — keyed by user email."""
+"""Firebase chat history management — keyed by user email.
+
+Supports both regular chat messages and mutable legal document drafts.
+Drafts exist as ONE message per chat that gets mutated in-place on edits.
+"""
 import os
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
-from redis_cache import cache_chat_history, get_cached_history
+from redis_cache import cache_chat_history, get_cached_history, cache_draft_summary
 
 _db = None
 
@@ -115,3 +119,96 @@ def delete_chat(user_email, chat_id):
     db.collection("ChatHistory").document(user_email).update({
         f"chats.{chat_id}": firestore.DELETE_FIELD
     })
+
+
+# ── Draft Management ─────────────────────────────────────────────────────────
+
+def save_draft(user_email, user_name, chat_id, draft_content, deed_type, 
+               summary, chat_name, doc_link=None):
+    """
+    Save or update a draft in Firebase.
+    
+    The draft exists as ONE message with role='draft' in the chat's messages.
+    If a draft message already exists, it is MUTATED IN PLACE (not appended).
+    This gives the Gemini-like canvas behavior where edits update the same block.
+    """
+    db = init_firebase()
+    doc_ref = db.collection("ChatHistory").document(user_email)
+    
+    # Load existing data
+    doc = doc_ref.get()
+    if doc.exists:
+        data = doc.to_dict()
+        if "chats" not in data:
+            data["chats"] = {}
+    else:
+        data = {"chats": {}}
+    
+    data["Name"] = user_name
+    data["email"] = user_email
+    
+    # Get or create the chat
+    if chat_id not in data["chats"]:
+        data["chats"][chat_id] = {
+            "chat_name": chat_name,
+            "messages": [],
+            "updated_at": datetime.utcnow(),
+        }
+    
+    chat = data["chats"][chat_id]
+    messages = chat.get("messages", [])
+    
+    # Build the draft message
+    draft_message = {
+        "role": "draft",
+        "content": draft_content,
+        "deed_type": deed_type,
+        "summary": summary,
+        "doc_link": doc_link or "",
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    
+    # Find existing draft message and mutate it, or append new one
+    draft_index = None
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "draft":
+            draft_index = i
+            break
+    
+    if draft_index is not None:
+        # Mutate in place — this is the key behavior
+        messages[draft_index] = draft_message
+    else:
+        # First draft in this chat — append it
+        messages.append(draft_message)
+    
+    chat["messages"] = messages
+    chat["updated_at"] = datetime.utcnow()
+    chat["chat_name"] = chat_name
+    
+    data["chats"][chat_id] = chat
+    doc_ref.set(data)
+    
+    # Cache only the summary + link in Redis (not the full draft)
+    cache_draft_summary(user_email, chat_id, summary, doc_link)
+    
+    # Also update the full message cache
+    cache_chat_history(user_email, chat_id, messages)
+
+
+def get_draft(user_email, chat_id):
+    """
+    Get the current draft message from a chat, if one exists.
+    
+    Returns:
+        The draft message dict, or None if no draft exists.
+    """
+    chat_data = load_chat(user_email, chat_id)
+    if not chat_data or "messages" not in chat_data:
+        return None
+    
+    for msg in chat_data["messages"]:
+        if msg.get("role") == "draft":
+            return msg
+    
+    return None

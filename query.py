@@ -123,6 +123,7 @@ def query_kb(
     query: str,
     top_k: int = 25,
     verbose: bool = True,
+    chat_context: str = "",
 ) -> tuple[RouteResult, list[RetrievedChunk]]:
     """
     Full RAG query pipeline:
@@ -132,7 +133,7 @@ def query_kb(
     4. Return route result and ranked chunks
     """
     # Step 1: Route
-    route = route_query(query)
+    route = route_query(query, chat_context=chat_context)
 
     if verbose:
         console.print(Panel(
