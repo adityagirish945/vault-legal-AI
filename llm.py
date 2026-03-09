@@ -1,5 +1,8 @@
 """
 LLM Integration for Vault KB using Gemini (google-genai SDK).
+
+Routes between the main legal assistant and the legal drafting expert
+based on the router's classification.
 """
 
 import os
@@ -11,7 +14,8 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 
 from query import query_kb, format_context_for_llm
-from redis_cache import format_history_context
+from redis_cache import format_history_context, build_router_context
+from legal_drafting_expert import ask_drafting
 
 console = Console()
 
@@ -33,23 +37,50 @@ def get_gemini_client():
     return genai.Client(api_key=api_key)
 
 
-def ask(kb_dir: str, question: str, chat_history: list = None, user_name: str = None, verbose: bool = True) -> str:
+def ask(kb_dir: str, question: str, chat_history: list = None, 
+        user_name: str = None, user_email: str = None,
+        uploaded_docs_context: str = "", existing_draft: str = "",
+        verbose: bool = True) -> dict | str:
     """
     Ask a question and get an LLM-generated answer using RAG.
+    
+    Routes to either:
+    - Main legal assistant (general/service/issue queries)
+    - Legal drafting expert (drafting queries)
     
     Args:
         kb_dir: Path to KB directory
         question: User's question
         chat_history: Previous messages for context
-        user_name: Authenticated user's name for personalized responses
+        user_name: Authenticated user's name
+        user_email: Authenticated user's email
+        uploaded_docs_context: Text extracted from uploaded docs (for drafting)
+        existing_draft: Current draft content (for edits)
         verbose: Whether to print rich output
         
     Returns:
-        LLM response text
+        For drafting: dict with keys (draft, summary, deed_type, assistant_message)
+        For non-drafting: str response text
     """
-    # Retrieve relevant chunks
-    route, chunks = query_kb(kb_dir, question, verbose=verbose)
+    # Build chat context from Redis cache for stateful routing
+    chat_context = build_router_context(chat_history) if chat_history else ""
     
+    # Retrieve relevant chunks (router decides which collections)
+    route, chunks = query_kb(kb_dir, question, verbose=verbose, chat_context=chat_context)
+    
+    # If router detected a drafting intent, delegate to the drafting expert
+    if route.is_drafting:
+        return ask_drafting(
+            kb_dir=kb_dir,
+            question=question,
+            chat_history=chat_history,
+            user_name=user_name,
+            user_email=user_email,
+            uploaded_docs_context=uploaded_docs_context,
+            existing_draft=existing_draft,
+        )
+    
+    # ── Non-drafting: standard RAG response ──
     if not chunks:
         return "I couldn't find relevant information to answer your question."
     

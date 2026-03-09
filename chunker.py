@@ -270,6 +270,33 @@ def load_and_chunk_l3(kb_dir: str) -> list[Chunk]:
     return all_chunks
 
 
+def load_and_chunk_l4(kb_dir: str) -> list[Chunk]:
+    """Load and chunk all L4 legal drafting documents."""
+    l4_dir = Path(kb_dir) / "L4"
+    all_chunks = []
+
+    if not l4_dir.exists():
+        return all_chunks
+
+    for md_file in sorted(l4_dir.glob("*.md")):
+        with open(md_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Derive deed name from filename
+        deed_name = md_file.stem.replace('_', ' ').replace('-', ' ').title()
+        source_file = str(md_file.relative_to(kb_dir))
+
+        chunks = chunk_markdown(
+            content=content,
+            source_file=source_file,
+            level="L4",
+            service=deed_name,
+        )
+        all_chunks.extend(chunks)
+
+    return all_chunks
+
+
 if __name__ == "__main__":
     """Quick test: chunk and print stats."""
     kb_dir = os.path.dirname(os.path.abspath(__file__))

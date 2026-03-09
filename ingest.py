@@ -22,6 +22,7 @@ from chunker import (
     load_and_chunk_l1,
     load_and_chunk_l2,
     load_and_chunk_l3,
+    load_and_chunk_l4,
 )
 
 console = Console()
@@ -30,6 +31,7 @@ console = Console()
 COLLECTION_L1 = "vault_l1_legal"
 COLLECTION_L2 = "vault_l2_services"
 COLLECTION_L3 = "vault_l3_discrepancies"
+COLLECTION_L4 = "vault_l4_drafting"
 
 # Embedding model
 EMBEDDING_MODEL = "gemini-embedding-001"
@@ -216,6 +218,17 @@ def run_ingestion(kb_dir: str):
         results["L3"] = count
         progress.update(task, completed=3, description=f"[green]L3: ✅ {count} chunks ingested")
 
+        # L4 — Legal Drafting
+        task = progress.add_task("[cyan]L4: Chunking legal drafting docs...", total=3)
+        progress.update(task, completed=0)
+
+        l4_chunks = load_and_chunk_l4(kb_dir)
+        progress.update(task, completed=1, description="[cyan]L4: Embedding & ingesting...")
+
+        count = ingest_chunks(client, COLLECTION_L4, l4_chunks, embedding_fn)
+        results["L4"] = count
+        progress.update(task, completed=3, description=f"[green]L4: ✅ {count} chunks ingested")
+
     elapsed = time.time() - start_time
 
     # Summary table
@@ -228,6 +241,7 @@ def run_ingestion(kb_dir: str):
     table.add_row("L1 — Legal Expertise", COLLECTION_L1, str(results.get("L1", 0)))
     table.add_row("L2 — Vault Services", COLLECTION_L2, str(results.get("L2", 0)))
     table.add_row("L3 — Discrepancies", COLLECTION_L3, str(results.get("L3", 0)))
+    table.add_row("L4 — Legal Drafting", COLLECTION_L4, str(results.get("L4", 0)))
     table.add_row(
         "[bold]Total[/bold]", "", f"[bold]{sum(results.values())}[/bold]"
     )
@@ -250,7 +264,7 @@ def get_stats(kb_dir: str):
     table.add_column("Documents", justify="right", style="green")
     table.add_column("Metadata Keys", style="white")
 
-    for name in [COLLECTION_L1, COLLECTION_L2, COLLECTION_L3]:
+    for name in [COLLECTION_L1, COLLECTION_L2, COLLECTION_L3, COLLECTION_L4]:
         try:
             col = client.get_collection(name=name, embedding_function=embedding_fn)
             count = col.count()
