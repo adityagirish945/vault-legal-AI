@@ -1442,6 +1442,7 @@ def _handle_response(prompt_text):
         user_email=user_email,
         uploaded_docs_context=st.session_state.uploaded_docs_context,
         existing_draft=st.session_state.draft_content,
+        is_drafting_active=st.session_state.drafting_mode,
         verbose=False,
     )
 

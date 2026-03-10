@@ -28,13 +28,14 @@ class RouteResult:
     is_drafting: bool = False
 
 
-def route_query(query: str, chat_context: str = "") -> RouteResult:
+def route_query(query: str, chat_context: str = "", is_drafting_active: bool = False) -> RouteResult:
     """
     Use LLM to classify query and route to appropriate collections.
 
     Args:
         query: The user's current message
         chat_context: Formatted chat history from Redis for stateful routing
+        is_drafting_active: Whether user is currently in an active drafting session
     """
 
     try:
@@ -45,7 +46,7 @@ def route_query(query: str, chat_context: str = "") -> RouteResult:
 
     if not api_key:
         # Fallback to simple routing if no API key
-        return RouteResult("general", [COLLECTION_L1], 0.5, "Fallback routing")
+        return RouteResult("general", [COLLECTION_L1], 0.5, "Fallback routing", is_drafting=False)
 
     client = genai.Client(api_key=api_key)
 
@@ -57,17 +58,27 @@ CONVERSATION CONTEXT (use this to understand follow-up messages and user intent)
 {chat_context}
 """
 
+    # Build drafting guidance based on current state
+    if is_drafting_active:
+        drafting_guidance = """4. drafting - User wants to DRAFT, CREATE, WRITE, PREPARE, or EDIT a legal document. This includes:
+   sale deed, sale agreement, gift deed, Will, Power of Attorney (PoA),
+   rectification deed, release deed, partition deed.
+   The user is CURRENTLY IN an active drafting session, so also route here if they are
+   continuing the draft (e.g. editing, adding clauses, changing names/details, providing
+   property info, or giving party details for the draft)."""
+    else:
+        drafting_guidance = """4. drafting - User EXPLICITLY wants to DRAFT, CREATE, WRITE, PREPARE, or GENERATE a legal document.
+   They must clearly express intent to create a document (e.g. "draft a sale deed", "prepare a gift deed").
+   Do NOT classify as drafting if the user is merely mentioning a property name, asking about
+   a property, or providing general information without explicitly asking for a document to be created."""
+
     prompt = f"""Classify this user query about property services in Bangalore into ONE category:
 
 CATEGORIES:
 1. general - Pure legal/process questions (What is X? How does Y work? Legal requirements, documents, procedures)
 2. service - Questions about Vault PropTech's services, pricing, booking, or offerings
 3. issue - Problems, rejections, delays, complaints, discrepancies, or troubleshooting, FAQs
-4. drafting - User wants to DRAFT, CREATE, WRITE, PREPARE, or EDIT a legal document. This includes:
-   sale deed, sale agreement, gift deed, Will, Power of Attorney (PoA),
-   rectification deed, release deed, partition deed.
-   Also route here if user is continuing an active drafting conversation
-   (e.g. editing a draft, adding clauses, changing names/details in a draft).
+{drafting_guidance}
 {context_section}
 QUERY: "{query}"
 
@@ -106,7 +117,7 @@ REASON: [brief explanation]"""
     # Map to collections
     collection_map = {
         "general": [COLLECTION_L1, COLLECTION_L2],
-        "service": [COLLECTION_L2, COLLECTION_L3],
+        "service": [COLLECTION_L2],  # Only L2 for services
         "issue": [COLLECTION_L1, COLLECTION_L2, COLLECTION_L3],
         "drafting": [COLLECTION_L4],
     }

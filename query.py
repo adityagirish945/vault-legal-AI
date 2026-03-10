@@ -7,12 +7,14 @@ Uses Gemini gemini-embedding-001 via google-genai SDK.
 """
 
 import os
+import threading
 from dataclasses import dataclass
 
 import chromadb
 from chromadb import Documents, EmbeddingFunction, Embeddings
 from google import genai
 from google.genai import types
+import streamlit as st
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -24,6 +26,10 @@ console = Console()
 
 # Must match ingest.py
 EMBEDDING_MODEL = "gemini-embedding-001"
+
+# Thread lock for ChromaDB access — PersistentClient is not thread-safe,
+# and with fastReruns enabled, multiple sessions run concurrently.
+_chroma_lock = threading.Lock()
 
 
 class GeminiEmbeddingFunction(EmbeddingFunction):
@@ -67,14 +73,20 @@ class RetrievedChunk:
     collection: str
 
 
+@st.cache_resource
 def get_chroma_client(kb_dir: str) -> chromadb.PersistentClient:
-    """Get the persistent ChromaDB client."""
+    """Get the persistent ChromaDB client (cached across reruns)."""
     db_path = os.path.join(kb_dir, "chroma_db")
-    return chromadb.PersistentClient(path=db_path)
+    settings = chromadb.config.Settings(
+        anonymized_telemetry=False,
+        allow_reset=True
+    )
+    return chromadb.PersistentClient(path=db_path, settings=settings)
 
 
+@st.cache_resource
 def get_embedding_function(task_type: str = "RETRIEVAL_QUERY") -> GeminiEmbeddingFunction:
-    """Get the Gemini embedding function."""
+    """Get the Gemini embedding function (cached across reruns)."""
     return GeminiEmbeddingFunction(task_type=task_type)
 
 
@@ -86,20 +98,21 @@ def retrieve_from_collection(
     top_k: int = 25,
 ) -> list[RetrievedChunk]:
     """Retrieve top-k chunks from a specific collection."""
-    try:
-        collection = client.get_collection(
-            name=collection_name,
-            embedding_function=embedding_fn,
-        )
-    except Exception as e:
-        console.print(f"[red]Collection '{collection_name}' not found. Run ingestion first.[/red]")
-        return []
+    with _chroma_lock:
+        try:
+            collection = client.get_collection(
+                name=collection_name,
+                embedding_function=embedding_fn,
+            )
+        except Exception as e:
+            console.print(f"[red]Collection '{collection_name}' not found. Run ingestion first.[/red]")
+            return []
 
-    results = collection.query(
-        query_texts=[query],
-        n_results=min(top_k, collection.count()),
-        include=["documents", "metadatas", "distances"],
-    )
+        results = collection.query(
+            query_texts=[query],
+            n_results=min(top_k, collection.count()),
+            include=["documents", "metadatas", "distances"],
+        )
 
     chunks = []
     if results["documents"] and results["documents"][0]:
@@ -121,9 +134,10 @@ def retrieve_from_collection(
 def query_kb(
     kb_dir: str,
     query: str,
-    top_k: int = 25,
+    top_k: int = 35,
     verbose: bool = True,
     chat_context: str = "",
+    is_drafting_active: bool = False,
 ) -> tuple[RouteResult, list[RetrievedChunk]]:
     """
     Full RAG query pipeline:
@@ -133,7 +147,7 @@ def query_kb(
     4. Return route result and ranked chunks
     """
     # Step 1: Route
-    route = route_query(query, chat_context=chat_context)
+    route = route_query(query, chat_context=chat_context, is_drafting_active=is_drafting_active)
 
     if verbose:
         console.print(Panel(

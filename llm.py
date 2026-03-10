@@ -40,6 +40,7 @@ def get_gemini_client():
 def ask(kb_dir: str, question: str, chat_history: list = None, 
         user_name: str = None, user_email: str = None,
         uploaded_docs_context: str = "", existing_draft: str = "",
+        is_drafting_active: bool = False,
         verbose: bool = True) -> dict | str:
     """
     Ask a question and get an LLM-generated answer using RAG.
@@ -66,7 +67,7 @@ def ask(kb_dir: str, question: str, chat_history: list = None,
     chat_context = build_router_context(chat_history) if chat_history else ""
     
     # Retrieve relevant chunks (router decides which collections)
-    route, chunks = query_kb(kb_dir, question, verbose=verbose, chat_context=chat_context)
+    route, chunks = query_kb(kb_dir, question, verbose=verbose, chat_context=chat_context, is_drafting_active=is_drafting_active)
     
     # If router detected a drafting intent, delegate to the drafting expert
     if route.is_drafting:
@@ -89,7 +90,7 @@ def ask(kb_dir: str, question: str, chat_history: list = None,
     history_context = format_history_context(chat_history) if chat_history else ""
     
     # Personalization line
-    user_line = f"\nThe user's name is {user_name}. Address them by name when appropriate to make the interaction feel personal and warm." if user_name else ""
+    user_line = f"\nThe user's name is {user_name} - if it is not mentioned, address them as 'Dear User'. Address them by name when appropriate to make the interaction feel personal and warm." if user_name else ""
     
     
     # Build prompt
@@ -107,6 +108,7 @@ Your role:
 - Suggest when professional legal consultation is advisable
 - Be empathetic to user frustrations with bureaucratic processes
 - **SYNTHESIZE information from ALL provided context chunks** - don't just use the first one
+- **CRITICAL: When user asks for services and pricing in table format, you MUST extract and present ALL pricing information found in the context, not just a subset**
 - ANSWER BETWEEN 100(simple answers)-150(complex scanrios) WORDS ONLY; : THE ANSWER HAS TO BE DENSELY INFORMATIVE(not with excessive detail, but with the RELAVANT DETAILS )
 - ANSWER IN A NICE, WELL DEFINED STRUCTURE TO MAKE IT EASY FOR USER TO READ
 - be extremely precise with the agenda of the query : deduce the objective of the prompt: for example
