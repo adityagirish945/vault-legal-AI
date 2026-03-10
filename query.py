@@ -13,6 +13,7 @@ import chromadb
 from chromadb import Documents, EmbeddingFunction, Embeddings
 from google import genai
 from google.genai import types
+import streamlit as st
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -67,14 +68,20 @@ class RetrievedChunk:
     collection: str
 
 
+@st.cache_resource
 def get_chroma_client(kb_dir: str) -> chromadb.PersistentClient:
-    """Get the persistent ChromaDB client."""
+    """Get the persistent ChromaDB client (cached across reruns)."""
     db_path = os.path.join(kb_dir, "chroma_db")
-    return chromadb.PersistentClient(path=db_path)
+    settings = chromadb.config.Settings(
+        anonymized_telemetry=False,
+        allow_reset=True
+    )
+    return chromadb.PersistentClient(path=db_path, settings=settings)
 
 
+@st.cache_resource
 def get_embedding_function(task_type: str = "RETRIEVAL_QUERY") -> GeminiEmbeddingFunction:
-    """Get the Gemini embedding function."""
+    """Get the Gemini embedding function (cached across reruns)."""
     return GeminiEmbeddingFunction(task_type=task_type)
 
 
@@ -83,7 +90,7 @@ def retrieve_from_collection(
     collection_name: str,
     query: str,
     embedding_fn: GeminiEmbeddingFunction,
-    top_k: int = 25,
+    top_k: int = 12,
 ) -> list[RetrievedChunk]:
     """Retrieve top-k chunks from a specific collection."""
     try:
@@ -121,9 +128,10 @@ def retrieve_from_collection(
 def query_kb(
     kb_dir: str,
     query: str,
-    top_k: int = 25,
+    top_k: int = 12,
     verbose: bool = True,
     chat_context: str = "",
+    is_drafting_active: bool = False,
 ) -> tuple[RouteResult, list[RetrievedChunk]]:
     """
     Full RAG query pipeline:
@@ -133,7 +141,7 @@ def query_kb(
     4. Return route result and ranked chunks
     """
     # Step 1: Route
-    route = route_query(query, chat_context=chat_context)
+    route = route_query(query, chat_context=chat_context, is_drafting_active=is_drafting_active)
 
     if verbose:
         console.print(Panel(

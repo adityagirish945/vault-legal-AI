@@ -83,8 +83,8 @@ def chunk_markdown(
     source_file: str,
     level: str,
     service: str = "",
-    max_chunk_size: int = 1500,
-    chunk_overlap: int = 200,
+    max_chunk_size: int = 3000,
+    chunk_overlap: int = 100,
 ) -> list[Chunk]:
     """
     Chunk a markdown document using header-based semantic splitting.

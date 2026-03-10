@@ -40,6 +40,7 @@ def get_gemini_client():
 def ask(kb_dir: str, question: str, chat_history: list = None, 
         user_name: str = None, user_email: str = None,
         uploaded_docs_context: str = "", existing_draft: str = "",
+        is_drafting_active: bool = False,
         verbose: bool = True) -> dict | str:
     """
     Ask a question and get an LLM-generated answer using RAG.
@@ -66,7 +67,7 @@ def ask(kb_dir: str, question: str, chat_history: list = None,
     chat_context = build_router_context(chat_history) if chat_history else ""
     
     # Retrieve relevant chunks (router decides which collections)
-    route, chunks = query_kb(kb_dir, question, verbose=verbose, chat_context=chat_context)
+    route, chunks = query_kb(kb_dir, question, verbose=verbose, chat_context=chat_context, is_drafting_active=is_drafting_active)
     
     # If router detected a drafting intent, delegate to the drafting expert
     if route.is_drafting:

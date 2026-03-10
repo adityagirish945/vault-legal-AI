@@ -80,7 +80,11 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
 def get_chroma_client(kb_dir: str) -> chromadb.PersistentClient:
     """Get or create a persistent ChromaDB client."""
     db_path = os.path.join(kb_dir, "chroma_db")
-    return chromadb.PersistentClient(path=db_path)
+    settings = chromadb.config.Settings(
+        anonymized_telemetry=False,
+        allow_reset=True
+    )
+    return chromadb.PersistentClient(path=db_path, settings=settings)
 
 
 def get_embedding_function(task_type: str = "RETRIEVAL_DOCUMENT") -> GeminiEmbeddingFunction:
