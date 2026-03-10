@@ -90,7 +90,7 @@ def ask(kb_dir: str, question: str, chat_history: list = None,
     history_context = format_history_context(chat_history) if chat_history else ""
     
     # Personalization line
-    user_line = f"\nThe user's name is {user_name}. Address them by name when appropriate to make the interaction feel personal and warm." if user_name else ""
+    user_line = f"\nThe user's name is {user_name} - if it is not mentioned, address them as 'Dear User'. Address them by name when appropriate to make the interaction feel personal and warm." if user_name else ""
     
     
     # Build prompt
