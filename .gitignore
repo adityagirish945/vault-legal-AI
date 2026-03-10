@@ -33,3 +33,10 @@ Thumbs.db
 
 # Streamlit secrets
 .streamlit/secrets.toml
+
+#data files
+# Knowledge base folders
+L1/
+L2/
+L3/
+L4/

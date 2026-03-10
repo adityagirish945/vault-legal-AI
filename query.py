@@ -7,6 +7,7 @@ Uses Gemini gemini-embedding-001 via google-genai SDK.
 """
 
 import os
+import threading
 from dataclasses import dataclass
 
 import chromadb
@@ -25,6 +26,10 @@ console = Console()
 
 # Must match ingest.py
 EMBEDDING_MODEL = "gemini-embedding-001"
+
+# Thread lock for ChromaDB access — PersistentClient is not thread-safe,
+# and with fastReruns enabled, multiple sessions run concurrently.
+_chroma_lock = threading.Lock()
 
 
 class GeminiEmbeddingFunction(EmbeddingFunction):
@@ -90,23 +95,24 @@ def retrieve_from_collection(
     collection_name: str,
     query: str,
     embedding_fn: GeminiEmbeddingFunction,
-    top_k: int = 12,
+    top_k: int = 25,
 ) -> list[RetrievedChunk]:
     """Retrieve top-k chunks from a specific collection."""
-    try:
-        collection = client.get_collection(
-            name=collection_name,
-            embedding_function=embedding_fn,
-        )
-    except Exception as e:
-        console.print(f"[red]Collection '{collection_name}' not found. Run ingestion first.[/red]")
-        return []
+    with _chroma_lock:
+        try:
+            collection = client.get_collection(
+                name=collection_name,
+                embedding_function=embedding_fn,
+            )
+        except Exception as e:
+            console.print(f"[red]Collection '{collection_name}' not found. Run ingestion first.[/red]")
+            return []
 
-    results = collection.query(
-        query_texts=[query],
-        n_results=min(top_k, collection.count()),
-        include=["documents", "metadatas", "distances"],
-    )
+        results = collection.query(
+            query_texts=[query],
+            n_results=min(top_k, collection.count()),
+            include=["documents", "metadatas", "distances"],
+        )
 
     chunks = []
     if results["documents"] and results["documents"][0]:
@@ -128,7 +134,7 @@ def retrieve_from_collection(
 def query_kb(
     kb_dir: str,
     query: str,
-    top_k: int = 12,
+    top_k: int = 35,
     verbose: bool = True,
     chat_context: str = "",
     is_drafting_active: bool = False,
