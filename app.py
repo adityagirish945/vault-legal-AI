@@ -1736,7 +1736,8 @@ if st.session_state.get("sd_show_phone_auth") and not st.session_state.sd_mode:
         recaptcha_site_key = get_recaptcha_site_key()
         firebase_ready = has_firebase_web_api_key()
         # Check if in dev mode
-        dev_mode = os.getenv("DEV_MODE", "").lower() == "true"
+        dev_mode = os.getenv("DEV_MODE", "").lower() == "true" or st.secrets.get("DEV_MODE", "").lower() == "true"
+
         sync_recaptcha_token(st.session_state.sd_recaptcha_nonce)
         st.markdown("""
         <div class="pa-icon">📱</div>
