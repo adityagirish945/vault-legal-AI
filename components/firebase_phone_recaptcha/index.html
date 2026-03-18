@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script src="https://unpkg.com/streamlit-component-lib@2.0.0/dist/index.js"></script>
+    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+    <style>
+      body {
+        margin: 0;
+        font-family: "DM Sans", sans-serif;
+        background: transparent;
+      }
+
+      #recaptcha-root {
+        display: flex;
+        justify-content: center;
+        min-height: 78px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="recaptcha-root"></div>
+
+    <script>
+      let widgetId = null;
+      let lastResetNonce = null;
+
+      function sendValue(value) {
+        Streamlit.setComponentValue(value || "");
+      }
+
+      function renderCaptcha(event) {
+        const args = (event.detail.args || {});
+        const siteKey = args.site_key;
+        const resetNonce = args.reset_nonce || 0;
+        const root = document.getElementById("recaptcha-root");
+
+        if (!siteKey) {
+          root.innerHTML = "";
+          sendValue("");
+          Streamlit.setFrameHeight(80);
+          return;
+        }
+
+        const maybeRender = () => {
+          if (!window.grecaptcha || !window.grecaptcha.render) {
+            window.setTimeout(maybeRender, 150);
+            return;
+          }
+
+          if (widgetId === null) {
+            root.innerHTML = '<div id="recaptcha-widget"></div>';
+            widgetId = window.grecaptcha.render("recaptcha-widget", {
+              sitekey: siteKey,
+              callback: (token) => {
+                sendValue(token);
+                Streamlit.setFrameHeight(86);
+              },
+              "expired-callback": () => sendValue(""),
+              "error-callback": () => sendValue(""),
+            });
+          } else if (lastResetNonce !== resetNonce) {
+            window.grecaptcha.reset(widgetId);
+            sendValue("");
+          }
+
+          lastResetNonce = resetNonce;
+          Streamlit.setFrameHeight(86);
+        };
+
+        maybeRender();
+      }
+
+      Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, renderCaptcha);
+      Streamlit.setComponentReady();
+      Streamlit.setFrameHeight(86);
+    </script>
+  </body>
+</html>

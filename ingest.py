@@ -23,6 +23,7 @@ from chunker import (
     load_and_chunk_l2,
     load_and_chunk_l3,
     load_and_chunk_l4,
+    load_and_chunk_l5,
 )
 
 console = Console()
@@ -32,6 +33,7 @@ COLLECTION_L1 = "vault_l1_legal"
 COLLECTION_L2 = "vault_l2_services"
 COLLECTION_L3 = "vault_l3_discrepancies"
 COLLECTION_L4 = "vault_l4_drafting"
+COLLECTION_L5 = "vault_l5_internal"
 
 # Embedding model
 EMBEDDING_MODEL = "gemini-embedding-001"
@@ -233,6 +235,17 @@ def run_ingestion(kb_dir: str):
         results["L4"] = count
         progress.update(task, completed=3, description=f"[green]L4: ✅ {count} chunks ingested")
 
+        # L5 — Internal SOPs
+        task = progress.add_task("[cyan]L5: Chunking internal SOP docs...", total=3)
+        progress.update(task, completed=0)
+
+        l5_chunks = load_and_chunk_l5(kb_dir)
+        progress.update(task, completed=1, description="[cyan]L5: Embedding & ingesting...")
+
+        count = ingest_chunks(client, COLLECTION_L5, l5_chunks, embedding_fn)
+        results["L5"] = count
+        progress.update(task, completed=3, description=f"[green]L5: ✅ {count} chunks ingested")
+
     elapsed = time.time() - start_time
 
     # Summary table
@@ -246,6 +259,7 @@ def run_ingestion(kb_dir: str):
     table.add_row("L2 — Vault Services", COLLECTION_L2, str(results.get("L2", 0)))
     table.add_row("L3 — Discrepancies", COLLECTION_L3, str(results.get("L3", 0)))
     table.add_row("L4 — Legal Drafting", COLLECTION_L4, str(results.get("L4", 0)))
+    table.add_row("L5 — Internal SOPs", COLLECTION_L5, str(results.get("L5", 0)))
     table.add_row(
         "[bold]Total[/bold]", "", f"[bold]{sum(results.values())}[/bold]"
     )
@@ -268,7 +282,7 @@ def get_stats(kb_dir: str):
     table.add_column("Documents", justify="right", style="green")
     table.add_column("Metadata Keys", style="white")
 
-    for name in [COLLECTION_L1, COLLECTION_L2, COLLECTION_L3, COLLECTION_L4]:
+    for name in [COLLECTION_L1, COLLECTION_L2, COLLECTION_L3, COLLECTION_L4, COLLECTION_L5]:
         try:
             col = client.get_collection(name=name, embedding_function=embedding_fn)
             count = col.count()
