@@ -297,6 +297,32 @@ def load_and_chunk_l4(kb_dir: str) -> list[Chunk]:
     return all_chunks
 
 
+def load_and_chunk_l5(kb_dir: str) -> list[Chunk]:
+    """Load and chunk all L5 internal SOP documents."""
+    l5_dir = Path(kb_dir) / "L5"
+    all_chunks = []
+
+    if not l5_dir.exists():
+        return all_chunks
+
+    for md_file in sorted(l5_dir.glob("*.md")):
+        with open(md_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        doc_name = md_file.stem.replace('_', ' ').replace('-', ' ').title()
+        source_file = str(md_file.relative_to(kb_dir))
+
+        chunks = chunk_markdown(
+            content=content,
+            source_file=source_file,
+            level="L5",
+            service=doc_name,
+        )
+        all_chunks.extend(chunks)
+
+    return all_chunks
+
+
 if __name__ == "__main__":
     """Quick test: chunk and print stats."""
     kb_dir = os.path.dirname(os.path.abspath(__file__))
@@ -321,3 +347,17 @@ if __name__ == "__main__":
     if l3_chunks:
         print(f"  Sample: {l3_chunks[0].text[:100]}...")
         print(f"  Metadata: {l3_chunks[0].metadata}")
+
+    print("\n=== L4 Chunking ===")
+    l4_chunks = load_and_chunk_l4(kb_dir)
+    print(f"L4: {len(l4_chunks)} chunks")
+    if l4_chunks:
+        print(f"  Sample: {l4_chunks[0].text[:100]}...")
+        print(f"  Metadata: {l4_chunks[0].metadata}")
+
+    print("\n=== L5 Chunking ===")
+    l5_chunks = load_and_chunk_l5(kb_dir)
+    print(f"L5: {len(l5_chunks)} chunks")
+    if l5_chunks:
+        print(f"  Sample: {l5_chunks[0].text[:100]}...")
+        print(f"  Metadata: {l5_chunks[0].metadata}")

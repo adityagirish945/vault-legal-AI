@@ -12,10 +12,18 @@ except (ImportError, KeyError):
     pass
 
 import os
+import json
 import streamlit as st
 from llm import ask, get_gemini_client
 from query import query_kb, format_context_for_llm
 from firebase_chat import save_chat, load_chats, load_chat, delete_chat, save_draft, get_draft
+from service_delivery_auth import send_otp, verify_otp
+from service_delivery_firebase import (
+    get_vault_user_by_phone,
+    save_sd_chat, load_sd_chats, load_sd_chat, delete_sd_chat,
+    write_escalation,
+)
+from service_delivery_llm import ask_service_delivery
 from vault_auth import check_auth, get_auth_config, get_login_url, clear_user_cookie
 from drive_manager import upload_file, extract_text_with_gemini, export_to_google_doc, list_user_files
 import uuid
@@ -55,6 +63,178 @@ SUGGESTION_CHIPS = [
     "I found a resale property. Can you check if it’s legally clear?",
     "Vault service pricing",
 ]
+
+_RECAPTCHA_TOKEN_QUERY_KEY = "sd_recaptcha_token"
+_RECAPTCHA_NONCE_QUERY_KEY = "sd_recaptcha_nonce"
+
+
+def get_recaptcha_site_key() -> str:
+    """Return the public reCAPTCHA site key used by Firebase phone auth."""
+    try:
+        return st.secrets.get("RECAPTCHA_SITE_KEY", os.getenv("RECAPTCHA_SITE_KEY", ""))
+    except (AttributeError, Exception):
+        return os.getenv("RECAPTCHA_SITE_KEY", "")
+
+
+def has_firebase_web_api_key() -> bool:
+    """Return whether Firebase phone-auth REST calls are configured."""
+    try:
+        return bool(st.secrets.get("FIREBASE_WEB_API_KEY", os.getenv("FIREBASE_WEB_API_KEY", "")))
+    except (AttributeError, Exception):
+        return bool(os.getenv("FIREBASE_WEB_API_KEY", ""))
+
+
+def _get_query_param(name: str) -> str:
+    """Read a Streamlit query param defensively."""
+    try:
+        value = st.query_params.get(name, "")
+    except Exception:
+        return ""
+    if isinstance(value, list):
+        return str(value[0]) if value else ""
+    return str(value or "")
+
+
+def clear_recaptcha_query_params() -> None:
+    """Keep the URL clean after the captcha is reset or consumed."""
+    try:
+        for key in (_RECAPTCHA_TOKEN_QUERY_KEY, _RECAPTCHA_NONCE_QUERY_KEY):
+            if key in st.query_params:
+                del st.query_params[key]
+    except Exception:
+        pass
+
+
+def sync_recaptcha_token(reset_nonce: int) -> None:
+    """Copy the latest captcha token from the browser URL into session state."""
+    query_nonce = _get_query_param(_RECAPTCHA_NONCE_QUERY_KEY)
+    token_from_url = _get_query_param(_RECAPTCHA_TOKEN_QUERY_KEY)
+    # Update session token if we have a fresh token from URL with matching nonce
+    # Preserve existing token if URL params are missing (happens on reruns)
+    if token_from_url and query_nonce == str(reset_nonce):
+        st.session_state.sd_recaptcha_token = token_from_url
+
+
+def render_recaptcha_widget(site_key: str, reset_nonce: int = 0) -> None:
+    """Render reCAPTCHA into the main app DOM and sync its token via query params."""
+    if not site_key:
+        return
+
+    host_id = "sd-recaptcha-host"
+    token_key = _RECAPTCHA_TOKEN_QUERY_KEY
+    nonce_key = _RECAPTCHA_NONCE_QUERY_KEY
+    site_key_js = json.dumps(site_key)
+    host_id_js = json.dumps(host_id)
+    token_key_js = json.dumps(token_key)
+    nonce_key_js = json.dumps(nonce_key)
+
+    st.markdown(
+        f'<div id="{host_id}" class="pa-recaptcha-host" aria-live="polite"></div>',
+        unsafe_allow_html=True,
+    )
+
+    bridge_html = f"""
+    <script>
+    (function() {{
+        const siteKey = {site_key_js};
+        const resetNonce = {int(reset_nonce)};
+        const hostId = {host_id_js};
+        const tokenKey = {token_key_js};
+        const nonceKey = {nonce_key_js};
+        const parentWindow = window.parent;
+        const parentDoc = parentWindow.document;
+
+        function updateQuery(token) {{
+            const url = new URL(parentWindow.location.href);
+            const nextToken = token || "";
+            const currentToken = url.searchParams.get(tokenKey) || "";
+            const currentNonce = url.searchParams.get(nonceKey) || "";
+
+            if (currentToken === nextToken && currentNonce === String(resetNonce)) {{
+                return;
+            }}
+
+            if (nextToken) {{
+                url.searchParams.set(tokenKey, nextToken);
+            }} else {{
+                url.searchParams.delete(tokenKey);
+            }}
+            url.searchParams.set(nonceKey, String(resetNonce));
+            parentWindow.location.replace(url.toString());
+        }}
+
+        function ensureApi(callback) {{
+            if (parentWindow.grecaptcha && parentWindow.grecaptcha.render) {{
+                callback();
+                return;
+            }}
+
+            let script = parentDoc.getElementById("sd-recaptcha-api");
+            if (!script) {{
+                script = parentDoc.createElement("script");
+                script.id = "sd-recaptcha-api";
+                script.src = "https://www.google.com/recaptcha/api.js?render=explicit";
+                script.async = true;
+                script.defer = true;
+                parentDoc.head.appendChild(script);
+            }}
+
+            let attempts = 0;
+            const waitForApi = () => {{
+                if (parentWindow.grecaptcha && parentWindow.grecaptcha.render) {{
+                    callback();
+                    return;
+                }}
+                if (attempts > 120) {{
+                    return;
+                }}
+                attempts += 1;
+                parentWindow.setTimeout(waitForApi, 200);
+            }};
+            waitForApi();
+        }}
+
+        function renderCaptcha() {{
+            const host = parentDoc.getElementById(hostId);
+            if (!host) {{
+                parentWindow.setTimeout(renderCaptcha, 150);
+                return;
+            }}
+
+            ensureApi(() => {{
+                const state = parentWindow.__sdRecaptchaState || (parentWindow.__sdRecaptchaState = {{}});
+                const widgetContainerId = hostId + "-widget";
+                const needsFreshWidget =
+                    state.widgetId == null ||
+                    state.siteKey !== siteKey ||
+                    !host.querySelector("iframe");
+
+                if (needsFreshWidget) {{
+                    host.innerHTML = '<div id="' + widgetContainerId + '"></div>';
+                    state.widgetId = parentWindow.grecaptcha.render(widgetContainerId, {{
+                        sitekey: siteKey,
+                        callback: (token) => updateQuery(token),
+                        "expired-callback": () => updateQuery(""),
+                        "error-callback": () => updateQuery(""),
+                    }});
+                    state.siteKey = siteKey;
+                    state.nonce = resetNonce;
+                    return;
+                }}
+
+                if (state.nonce !== resetNonce) {{
+                    parentWindow.grecaptcha.reset(state.widgetId);
+                    state.nonce = resetNonce;
+                    updateQuery("");
+                }}
+            }});
+        }}
+
+        renderCaptcha();
+    }})();
+    </script>
+    """
+    st.components.v1.html(bridge_html, height=0, width=0)
 
 
 # ── Custom CSS ──────────────────────────────────────────────────────────────
@@ -995,6 +1175,248 @@ div[data-testid="stToast"] {
     color: var(--text-2);
     gap: 0.8rem;
 }
+
+/* ═══════════════════════════════════════════════════════
+   CHECK SERVICE STATUS SIDEBAR BUTTON
+   ═══════════════════════════════════════════════════════ */
+.css-check-service button {
+    background: linear-gradient(135deg, #0C0A93 0%, #4D4BFF 100%) !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.82rem !important;
+    padding: 0.5rem 1rem !important;
+    box-shadow: 0 2px 8px rgba(12,10,147,0.25) !important;
+    text-align: center !important;
+    transition: all 0.25s var(--ease) !important;
+}
+.css-check-service button:hover {
+    background: linear-gradient(135deg, #1a18b8 0%, #6866FF 100%) !important;
+    box-shadow: 0 4px 16px rgba(12,10,147,0.35) !important;
+    transform: translateY(-1px) !important;
+    color: #FFFFFF !important;
+}
+.css-back-to-vault button {
+    background: rgba(12,10,147,0.07) !important;
+    color: var(--brand) !important;
+    border: 1.5px solid var(--brand) !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.78rem !important;
+    padding: 0.4rem 0.8rem !important;
+    transition: all 0.2s var(--ease) !important;
+}
+.css-back-to-vault button:hover {
+    background: rgba(12,10,147,0.12) !important;
+    color: var(--brand) !important;
+}
+
+/* ═══════════════════════════════════════════════════════
+   PHONE AUTH CARD
+   ═══════════════════════════════════════════════════════ */
+.phone-auth-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 60vh;
+    padding: 2rem 1rem;
+}
+.phone-auth-card {
+    background: #FFFFFF;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 2.5rem 2.5rem 2rem 2.5rem;
+    max-width: 440px;
+    width: 100%;
+    box-shadow: 0 8px 30px rgba(12,10,147,0.08);
+    text-align: center;
+    animation: phoneCardIn 0.4s var(--ease);
+}
+@keyframes phoneCardIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.phone-auth-card .pa-icon {
+    width: 56px; height: 56px;
+    background: linear-gradient(135deg, rgba(12,10,147,0.08) 0%, rgba(77,75,255,0.1) 100%);
+    border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 1.2rem auto;
+    font-size: 1.5rem;
+}
+.phone-auth-card h3 {
+    font-size: 1.2rem; font-weight: 700;
+    color: var(--text); margin: 0 0 0.3rem 0;
+    letter-spacing: -0.3px;
+}
+.phone-auth-card .pa-sub {
+    font-size: 0.85rem; color: var(--text-3);
+    margin: 0 0 1.8rem 0; line-height: 1.6;
+}
+.phone-auth-card .pa-step-badge {
+    display: inline-block;
+    background: var(--brand-dim);
+    color: var(--brand);
+    border-radius: 100px;
+    font-size: 0.7rem; font-weight: 600;
+    padding: 0.2rem 0.7rem;
+    margin-bottom: 1rem;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+.pa-captcha-note {
+    font-size: 0.72rem; color: var(--text-3);
+    margin-top: 0.6rem;
+    padding: 0.5rem 0.8rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    display: flex; align-items: center; gap: 0.4rem;
+    justify-content: center;
+}
+.pa-captcha-wrap {
+    margin-top: 0.8rem;
+}
+.pa-recaptcha-host {
+    display: flex;
+    justify-content: center;
+    min-height: 78px;
+}
+.pa-captcha-status {
+    font-size: 0.74rem;
+    margin-top: 0.6rem;
+    color: var(--text-2);
+}
+.pa-captcha-status.ok {
+    color: #15803D;
+}
+.pa-captcha-warning {
+    font-size: 0.72rem;
+    color: #B45309;
+    margin-top: 0.7rem;
+    padding: 0.55rem 0.8rem;
+    background: #FFF7ED;
+    border: 1px solid #FED7AA;
+    border-radius: 8px;
+}
+
+/* ── Service delivery action buttons ── */
+.sd-send-btn button, .sd-primary-btn button {
+    background: linear-gradient(135deg, #0C0A93 0%, #4D4BFF 100%) !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.84rem !important;
+    padding: 0.5rem 1.2rem !important;
+    box-shadow: 0 2px 8px rgba(12,10,147,0.2) !important;
+    transition: all 0.25s var(--ease) !important;
+}
+.sd-send-btn button:hover, .sd-primary-btn button:hover {
+    background: linear-gradient(135deg, #1a18b8 0%, #6866FF 100%) !important;
+    box-shadow: 0 4px 14px rgba(12,10,147,0.3) !important;
+    transform: translateY(-1px) !important;
+    color: #FFFFFF !important;
+}
+
+/* ═══════════════════════════════════════════════════════
+   SERVICE DELIVERY HERO BANNER
+   ═══════════════════════════════════════════════════════ */
+.sd-hero {
+    background: linear-gradient(135deg, #0C0A93 0%, #1a18b8 60%, #4D4BFF 100%);
+    border-radius: 16px;
+    padding: 1.5rem 1.8rem;
+    margin-bottom: 1.5rem;
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    box-shadow: 0 4px 20px rgba(12,10,147,0.2);
+}
+.sd-hero .sd-hero-icon {
+    font-size: 2rem;
+    background: rgba(255,255,255,0.15);
+    border-radius: 12px;
+    width: 52px; height: 52px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}
+.sd-hero h3 {
+    font-size: 1.05rem; font-weight: 700;
+    margin: 0 0 0.15rem 0;
+    color: #FFFFFF !important;
+    display: block !important;
+}
+.sd-hero .sd-hero-sub {
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.7);
+    margin: 0;
+}
+.sd-user-chip {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    background: rgba(255,255,255,0.85);
+    color: var(--brand);
+    border-radius: 100px;
+    padding: 0.25rem 0.8rem;
+    font-size: 0.75rem; font-weight: 600;
+    margin-top: 0.6rem;
+}
+
+/* ═══════════════════════════════════════════════════════
+   ESCALATION BUTTONS
+   ═══════════════════════════════════════════════════════ */
+.escalation-panel {
+    background: linear-gradient(135deg, rgba(239,68,68,0.04) 0%, rgba(239,68,68,0.07) 100%);
+    border: 1.5px solid rgba(239,68,68,0.2);
+    border-radius: 14px;
+    padding: 1rem 1.2rem;
+    margin: 0.8rem 0;
+    animation: escalationIn 0.4s var(--ease);
+}
+@keyframes escalationIn {
+    from { opacity:0; transform: scale(0.97); }
+    to   { opacity:1; transform: scale(1); }
+}
+.escalation-panel .ep-title {
+    font-size: 0.82rem; font-weight: 600;
+    color: #EF4444;
+    margin: 0 0 0.6rem 0;
+    display: flex; align-items: center; gap: 0.4rem;
+}
+.escalation-panel .ep-sub {
+    font-size: 0.76rem; color: var(--text-3); margin-bottom: 0.8rem;
+}
+.esc-poc-btn button {
+    background: #FFFFFF !important;
+    color: #EF4444 !important;
+    border: 1.5px solid rgba(239,68,68,0.4) !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.8rem !important;
+    transition: all 0.2s var(--ease) !important;
+}
+.esc-poc-btn button:hover {
+    background: rgba(239,68,68,0.06) !important;
+    border-color: #EF4444 !important;
+}
+.esc-ct-btn button {
+    background: #EF4444 !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.8rem !important;
+    box-shadow: 0 2px 8px rgba(239,68,68,0.25) !important;
+    transition: all 0.2s var(--ease) !important;
+}
+.esc-ct-btn button:hover {
+    background: #DC2626 !important;
+    box-shadow: 0 4px 14px rgba(239,68,68,0.35) !important;
+    transform: translateY(-1px) !important;
+    color: #FFFFFF !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1015,6 +1437,32 @@ if "uploaded_docs_context" not in st.session_state:
     st.session_state.uploaded_docs_context = ""
 if "uploaded_files_info" not in st.session_state:
     st.session_state.uploaded_files_info = []
+
+# ── Service Delivery session state ──────────────────────────────────────────
+if "sd_mode" not in st.session_state:
+    st.session_state.sd_mode = False           # True = in service delivery mode
+if "sd_auth_step" not in st.session_state:
+    st.session_state.sd_auth_step = "phone"   # 'phone' | 'otp' | 'done'
+if "sd_session_info" not in st.session_state:
+    st.session_state.sd_session_info = ""      # Firebase sessionInfo
+if "sd_phone" not in st.session_state:
+    st.session_state.sd_phone = ""             # verified phone number
+if "sd_user_data" not in st.session_state:
+    st.session_state.sd_user_data = None       # vaultUsers record
+if "sd_messages" not in st.session_state:
+    st.session_state.sd_messages = []
+if "sd_chat_id" not in st.session_state:
+    st.session_state.sd_chat_id = str(uuid.uuid4())
+if "sd_chat_name" not in st.session_state:
+    st.session_state.sd_chat_name = "Service Query"
+if "sd_show_phone_auth" not in st.session_state:
+    st.session_state.sd_show_phone_auth = False  # show the auth modal/flow
+if "sd_escalation_pending" not in st.session_state:
+    st.session_state.sd_escalation_pending = False  # show escalation buttons
+if "sd_recaptcha_token" not in st.session_state:
+    st.session_state.sd_recaptcha_token = ""
+if "sd_recaptcha_nonce" not in st.session_state:
+    st.session_state.sd_recaptcha_nonce = 0
 
 # ═══════════════════════════════════════════════════════
 # AUTH CHECK — Soft gate (anonymous users can still chat)
@@ -1076,68 +1524,100 @@ if is_logged_in:
         </div>
         """, unsafe_allow_html=True)
 
+        showing_sd_history = st.session_state.sd_mode and bool(st.session_state.sd_phone)
+
         st.markdown('<div class="new-chat-btn">', unsafe_allow_html=True)
-        if st.button("New Chat", use_container_width=True):
-            st.session_state.messages = []
-            st.session_state.chat_id = str(uuid.uuid4())
-            st.session_state.chat_name = "New Chat"
-            st.session_state.drafting_mode = False
-            st.session_state.current_deed_type = ""
-            st.session_state.draft_content = ""
-            st.session_state.uploaded_docs_context = ""
-            st.session_state.uploaded_files_info = []
-            st.toast("New conversation started")
-            st.rerun()
+        if showing_sd_history:
+            if st.button("New Service Chat", use_container_width=True, key="new_sd_chat_btn"):
+                st.session_state.sd_messages = []
+                st.session_state.sd_chat_id = str(uuid.uuid4())
+                st.session_state.sd_chat_name = "Service Query"
+                st.session_state.sd_escalation_pending = False
+                st.toast("New service conversation started")
+                st.rerun()
+        else:
+            if st.button("New Chat", use_container_width=True, key="new_legal_chat_btn"):
+                st.session_state.messages = []
+                st.session_state.chat_id = str(uuid.uuid4())
+                st.session_state.chat_name = "New Chat"
+                st.session_state.drafting_mode = False
+                st.session_state.current_deed_type = ""
+                st.session_state.draft_content = ""
+                st.session_state.uploaded_docs_context = ""
+                st.session_state.uploaded_files_info = []
+                st.toast("New conversation started")
+                st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("---")
-        st.subheader("Chat History")
+        st.subheader("Service History" if showing_sd_history else "Chat History")
 
-        chats = load_chats(user_email)
+        chats = load_sd_chats(st.session_state.sd_phone) if showing_sd_history else load_chats(user_email)
 
         if not chats:
+            empty_label = "No service conversations yet" if showing_sd_history else "No conversations yet"
             st.markdown(
-                "<p style='color:#9CA3AF; font-size:0.78rem; padding:0.3rem 0; font-style:italic;'>No conversations yet</p>",
+                f"<p style='color:#9CA3AF; font-size:0.78rem; padding:0.3rem 0; font-style:italic;'>{empty_label}</p>",
                 unsafe_allow_html=True,
             )
 
         for chat in chats:
-            is_active = chat["chat_id"] == st.session_state.chat_id
+            active_chat_id = st.session_state.sd_chat_id if showing_sd_history else st.session_state.chat_id
+            is_active = chat["chat_id"] == active_chat_id
             col1, col2 = st.columns([4, 1])
             with col1:
                 if is_active:
                     st.markdown('<div class="chat-active">', unsafe_allow_html=True)
-                if st.button(chat["chat_name"], key=chat["chat_id"], use_container_width=True):
-                    loaded = load_chat(user_email, chat["chat_id"])
-                    if loaded:
-                        st.session_state.messages = loaded["messages"]
-                        st.session_state.chat_id = chat["chat_id"]
-                        st.session_state.chat_name = chat["chat_name"]
-                        # Restore draft state if this chat has a draft
-                        draft_msg = None
-                        for m in loaded["messages"]:
-                            if m.get("role") == "draft":
-                                draft_msg = m
-                                break
-                        if draft_msg:
-                            st.session_state.drafting_mode = True
-                            st.session_state.draft_content = draft_msg.get("content", "")
-                            st.session_state.current_deed_type = draft_msg.get("deed_type", "")
-                        else:
-                            st.session_state.drafting_mode = False
-                            st.session_state.draft_content = ""
-                            st.session_state.current_deed_type = ""
-                        st.rerun()
+                button_key = f"{'sd' if showing_sd_history else 'legal'}_{chat['chat_id']}"
+                if st.button(chat["chat_name"], key=button_key, use_container_width=True):
+                    if showing_sd_history:
+                        loaded = load_sd_chat(st.session_state.sd_phone, chat["chat_id"])
+                        if loaded:
+                            st.session_state.sd_messages = loaded.get("messages", [])
+                            st.session_state.sd_chat_id = chat["chat_id"]
+                            st.session_state.sd_chat_name = loaded.get("chat_name", chat["chat_name"])
+                            st.session_state.sd_escalation_pending = False
+                            st.rerun()
+                    else:
+                        loaded = load_chat(user_email, chat["chat_id"])
+                        if loaded:
+                            st.session_state.messages = loaded["messages"]
+                            st.session_state.chat_id = chat["chat_id"]
+                            st.session_state.chat_name = chat["chat_name"]
+                            # Restore draft state if this chat has a draft
+                            draft_msg = None
+                            for m in loaded["messages"]:
+                                if m.get("role") == "draft":
+                                    draft_msg = m
+                                    break
+                            if draft_msg:
+                                st.session_state.drafting_mode = True
+                                st.session_state.draft_content = draft_msg.get("content", "")
+                                st.session_state.current_deed_type = draft_msg.get("deed_type", "")
+                            else:
+                                st.session_state.drafting_mode = False
+                                st.session_state.draft_content = ""
+                                st.session_state.current_deed_type = ""
+                            st.rerun()
                 if is_active:
                     st.markdown('</div>', unsafe_allow_html=True)
             with col2:
                 st.markdown('<div class="del-btn">', unsafe_allow_html=True)
-                if st.button("\u2715", key=f"del_{chat['chat_id']}"):
-                    delete_chat(user_email, chat["chat_id"])
-                    if chat["chat_id"] == st.session_state.chat_id:
-                        st.session_state.messages = []
-                        st.session_state.chat_id = str(uuid.uuid4())
-                        st.session_state.chat_name = "New Chat"
+                delete_key = f"del_{'sd' if showing_sd_history else 'legal'}_{chat['chat_id']}"
+                if st.button("\u2715", key=delete_key):
+                    if showing_sd_history:
+                        delete_sd_chat(st.session_state.sd_phone, chat["chat_id"])
+                        if chat["chat_id"] == st.session_state.sd_chat_id:
+                            st.session_state.sd_messages = []
+                            st.session_state.sd_chat_id = str(uuid.uuid4())
+                            st.session_state.sd_chat_name = "Service Query"
+                            st.session_state.sd_escalation_pending = False
+                    else:
+                        delete_chat(user_email, chat["chat_id"])
+                        if chat["chat_id"] == st.session_state.chat_id:
+                            st.session_state.messages = []
+                            st.session_state.chat_id = str(uuid.uuid4())
+                            st.session_state.chat_name = "New Chat"
                     st.toast("Chat deleted")
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -1160,6 +1640,28 @@ if is_logged_in:
 
         st.markdown('<div style="margin-top: 1.2rem;"></div>', unsafe_allow_html=True)
 
+        # ── Check Service Status / Back to Vault button ──
+        if not st.session_state.sd_mode:
+            st.markdown('<div class="css-check-service">', unsafe_allow_html=True)
+            if st.button("🔍 Check Service Status", use_container_width=True, key="btn_check_service"):
+                st.session_state.sd_show_phone_auth = True
+                st.session_state.sd_auth_step = "phone"
+                st.session_state.sd_session_info = ""
+                st.session_state.sd_recaptcha_token = ""
+                st.session_state.sd_recaptcha_nonce += 1
+                clear_recaptcha_query_params()
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="css-back-to-vault">', unsafe_allow_html=True)
+            if st.button("← Back to Vault Legal Assistant", use_container_width=True, key="btn_back_vault"):
+                st.session_state.sd_mode = False
+                st.session_state.sd_show_phone_auth = False
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div style="margin-top: 0.5rem;"></div>', unsafe_allow_html=True)
+
         # Visit Vault button — appealing gradient style
         st.markdown("""
         <div class="visit-vault-sb">
@@ -1172,6 +1674,7 @@ if is_logged_in:
 
         # Spacer
         st.markdown('<div style="margin-top: 1.8rem;"></div>', unsafe_allow_html=True)
+
 
         # Show uploaded files count if any (compact indicator in sidebar)
         if st.session_state.uploaded_files_info:
@@ -1213,205 +1716,296 @@ if is_logged_in:
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-# Main content
-
-# Hero — centered brand presentation
-st.markdown(f"""
-<div class="hero-block">
-    {VAULT_LOGO_SVG}
-    <h2>Legal Assistant</h2>
-    <p>Property documentation & legal guidance · Exclusively in Bengaluru</p>
-</div>
-""", unsafe_allow_html=True)
-
-# Free-user CTA banner
-if not is_logged_in:
+# ═══════════════════════════════════════════════════════
+# MODE ROUTER — phone auth → SD chat → normal assistant
+# ═══════════════════════════════════════════════════════
+if st.session_state.get("sd_show_phone_auth") and not st.session_state.sd_mode:
+    # ── PHONE AUTH FLOW ──────────────────────────────────────────────────────
     st.markdown(f"""
-    <div class="free-cta-bar">
-        <b>SIGN IN</b>to save chats, export drafts, and upload documents.
-        <a href="{login_url}" class="cta-login-btn">
-            <img src="https://developers.google.com/identity/images/g-logo.png" alt="">
-            Sign In
-        </a>
+    <div class="hero-block">
+        {VAULT_LOGO_SVG}
+        <h2>Service Status Check</h2>
+        <p>Verify your identity to access your service updates</p>
     </div>
     """, unsafe_allow_html=True)
 
-# Empty state with CLICKABLE suggestion chips (#2)
-if not st.session_state.messages:
-    st.markdown(f"""
-    <div class="empty-state">
-        <h3>How can I help you today?</h3>
-        <p>Ask about property documentation, legal processes, or Vault's services in Bengaluru.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown('<div class="phone-auth-wrap">', unsafe_allow_html=True)
+    st.markdown('<div class="phone-auth-card">', unsafe_allow_html=True)
 
-    # Clickable chips — these are real st.button elements
-    st.markdown('<div class="chip-grid">', unsafe_allow_html=True)
-    chip_cols = st.columns(3)
-    for i, chip_text in enumerate(SUGGESTION_CHIPS):
-        with chip_cols[i % 3]:
-            if st.button(chip_text, key=f"chip_{i}"):
-                st.session_state.chat_name = chip_text[:20] + ("..." if len(chip_text) > 20 else "")
-                st.session_state.messages.append({"role": "user", "content": chip_text})
+    if st.session_state.sd_auth_step == "phone":
+        recaptcha_site_key = get_recaptcha_site_key()
+        firebase_ready = has_firebase_web_api_key()
+        # Check if in dev mode
+        dev_mode = os.getenv("DEV_MODE", "").lower() == "true"
+        sync_recaptcha_token(st.session_state.sd_recaptcha_nonce)
+        st.markdown("""
+        <div class="pa-icon">📱</div>
+        <div class="pa-step-badge">Step 1 of 3 · Enter Number</div>
+        <h3>Enter your phone number</h3>
+        <p class="pa-sub">We'll send a one-time password to verify your identity.<br>Use the number registered with Vault.</p>
+        """, unsafe_allow_html=True)
+        
+        # Show dev mode notice
+        if dev_mode:
+            st.markdown("""
+            <div class="pa-captcha-warning" style="background:#DBEAFE;border-color:#93C5FD;color:#1E40AF;">
+                🔧 <strong>DEV MODE:</strong> reCAPTCHA is bypassed. Use OTP <strong>123456</strong> after sending.
+            </div>
+            """, unsafe_allow_html=True)
+        ph_col, _ = st.columns([3, 1])
+        with ph_col:
+            phone_input = st.text_input(
+                "Phone number",
+                placeholder="+91 98765 43210",
+                label_visibility="collapsed",
+                key="sd_phone_input_field",
+            )
+        st.markdown('<div class="pa-captcha-wrap">', unsafe_allow_html=True)
+        if not dev_mode and recaptcha_site_key:
+            render_recaptcha_widget(
+                recaptcha_site_key,
+                reset_nonce=st.session_state.sd_recaptcha_nonce,
+            )
+
+            if st.session_state.sd_recaptcha_token:
+                st.markdown(
+                    '<div class="pa-captcha-status ok">reCAPTCHA verified. You can continue.</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    '<div class="pa-captcha-note">Complete the reCAPTCHA challenge to receive your OTP.</div>',
+                    unsafe_allow_html=True,
+                )
+
+            if not firebase_ready:
+                st.markdown("""
+                <div class="pa-captcha-warning">
+                    FIREBASE_WEB_API_KEY is not configured. The captcha can render, but OTP requests will fail until you add the Firebase Web API key.
+                </div>
+                """, unsafe_allow_html=True)
+        elif not dev_mode:
+            st.markdown("""
+            <div class="pa-captcha-warning">
+                RECAPTCHA_SITE_KEY is not configured. Add your Firebase-auth reCAPTCHA site key to enable OTP verification.
+            </div>
+            """, unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sd-primary-btn" style="margin-top:1rem;">', unsafe_allow_html=True)
+        if st.button("Send OTP →", use_container_width=True, key="sd_send_otp_btn"):
+            raw = phone_input.strip().replace(" ", "").replace("-", "")
+            # Try session state first, then fallback to query params, then try one more sync
+            token = st.session_state.sd_recaptcha_token
+            if not token:
+                token = _get_query_param(_RECAPTCHA_TOKEN_QUERY_KEY)
+            if not token:
+                # One final attempt to sync from URL before failing
+                sync_recaptcha_token(st.session_state.sd_recaptcha_nonce)
+                token = st.session_state.sd_recaptcha_token
+            if not recaptcha_site_key and not dev_mode:
+                st.error("reCAPTCHA is not configured. Please add RECAPTCHA_SITE_KEY first.")
+            elif not firebase_ready and not dev_mode:
+                st.error("Firebase phone auth is not configured. Please add FIREBASE_WEB_API_KEY first.")
+            elif not token and not dev_mode:
+                st.error("Please complete the reCAPTCHA challenge first.")
+            elif not raw:
+                st.error("Please enter your phone number.")
+            elif not raw.startswith("+"):
+                st.error("Please enter number in international format, e.g. +919876543210")
+            else:
+                with st.spinner("Sending OTP…"):
+                    result = send_otp(raw, recaptcha_token=token)
+                if "error" in result:
+                    error_text = str(result["error"])
+                    if any(flag in error_text for flag in ("CAPTCHA", "INVALID_APP_CREDENTIAL", "MISSING_RECAPTCHA_TOKEN")):
+                        st.session_state.sd_recaptcha_token = ""
+                        st.session_state.sd_recaptcha_nonce += 1
+                        clear_recaptcha_query_params()
+                    st.error(f"Could not send OTP: {result['error']}")
+                else:
+                    st.session_state.sd_phone = raw
+                    st.session_state.sd_session_info = result["sessionInfo"]
+                    st.session_state.sd_auth_step = "otp"
+                    st.session_state.sd_recaptcha_token = ""
+                    st.session_state.sd_recaptcha_nonce += 1
+                    clear_recaptcha_query_params()
+                    st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    elif st.session_state.sd_auth_step == "otp":
+        phone_display = st.session_state.sd_phone
+        st.markdown(f"""
+        <div class="pa-icon">🔐</div>
+        <div class="pa-step-badge">Step 2 of 3 · Enter OTP</div>
+        <h3>Check your messages</h3>
+        <p class="pa-sub">A 6-digit code was sent to <strong>{phone_display}</strong>.<br>Enter it below to verify.</p>
+        """, unsafe_allow_html=True)
+        otp_col, _ = st.columns([2, 1])
+        with otp_col:
+            otp_input = st.text_input(
+                "One-time password",
+                placeholder="• • • • • •",
+                max_chars=6,
+                label_visibility="collapsed",
+                key="sd_otp_input_field",
+                type="password",
+            )
+        btn_col1, btn_col2 = st.columns([2, 1])
+        with btn_col1:
+            st.markdown('<div class="sd-primary-btn">', unsafe_allow_html=True)
+            if st.button("Verify OTP →", use_container_width=True, key="sd_verify_otp_btn"):
+                code = otp_input.strip()
+                if not code or len(code) < 4:
+                    st.error("Please enter the OTP you received.")
+                else:
+                    with st.spinner("Verifying…"):
+                        result = verify_otp(st.session_state.sd_session_info, code)
+                    if "error" in result:
+                        st.error(f"Verification failed: {result['error']}")
+                    else:
+                        phone = result.get("phoneNumber", st.session_state.sd_phone)
+                        st.session_state.sd_phone = phone
+                        with st.spinner("Loading your account…"):
+                            ud = get_vault_user_by_phone(phone)
+                        st.session_state.sd_user_data = ud
+                        st.session_state.sd_auth_step = "done"
+                        st.session_state.sd_mode = True
+                        st.session_state.sd_show_phone_auth = False
+                        st.session_state.sd_messages = []
+                        st.session_state.sd_chat_id = str(uuid.uuid4())
+                        st.session_state.sd_chat_name = "Service Query"
+                        st.session_state.sd_escalation_pending = False
+                        st.toast("✅ Phone verified! Loading your service agent…")
+                        st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+        with btn_col2:
+            if st.button("← Change number", key="sd_change_num_btn"):
+                st.session_state.sd_auth_step = "phone"
+                st.session_state.sd_session_info = ""
+                st.session_state.sd_recaptcha_token = ""
+                st.session_state.sd_recaptcha_nonce += 1
+                clear_recaptcha_query_params()
                 st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
 
-# ═══════════════════════════════════════════════════════
-# HELPERS — Generate downloadable PDF / DOCX from draft
-# ═══════════════════════════════════════════════════════
+    st.markdown('</div>', unsafe_allow_html=True)   # phone-auth-card
+    st.markdown('</div>', unsafe_allow_html=True)   # phone-auth-wrap
 
-def _strip_md(text: str) -> str:
-    """Return plain text from Markdown (best-effort)."""
-    text = re.sub(r'#{1,6}\s*', '', text)          # headings
-    text = re.sub(r'\*{1,2}(.+?)\*{1,2}', r'\1', text)  # bold/italic
-    text = re.sub(r'[-*]\s+', '- ', text)            # bullets
-    text = text.encode('latin-1', errors='replace').decode('latin-1')  # safe for PDF
-    return text.strip()
+elif st.session_state.sd_mode:
+    # ── SERVICE DELIVERY CHAT ────────────────────────────────────────────────
+    kb_dir_sd = os.path.dirname(os.path.abspath(__file__))
+    sd_phone  = st.session_state.sd_phone
+    sd_user   = st.session_state.sd_user_data or {}
+    sd_display_name = (
+        sd_user.get("name") or sd_user.get("Name") or
+        sd_user.get("customerName") or sd_user.get("fullName") or sd_phone
+    )
 
-
-def _generate_pdf(content: str, deed_type: str) -> bytes:
-    """Create a simple PDF from Markdown draft content."""
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=20)
-    pdf.add_page()
-    pdf.set_font('Helvetica', 'B', 16)
-    title = deed_type.replace('_', ' ').title()
-    pdf.cell(0, 12, title, ln=True, align='C')
-    pdf.ln(6)
-    pdf.set_font('Helvetica', '', 11)
-    plain = _strip_md(content)
-    for line in plain.split('\n'):
-        stripped = line.strip()
-        if not stripped:
-            pdf.ln(4)
-            continue
-        pdf.multi_cell(0, 6, stripped)
-        pdf.ln(2)
-    return bytes(pdf.output())
-
-
-def _generate_docx(content: str, deed_type: str) -> bytes:
-    """Create a DOCX from Markdown draft content."""
-    doc = DocxDocument()
-    title = deed_type.replace('_', ' ').title()
-    heading = doc.add_heading(title, level=0)
-    heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    plain = _strip_md(content)
-    for line in plain.split('\n'):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        p = doc.add_paragraph(stripped)
-        for run in p.runs:
-            run.font.size = Pt(11)
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
-
-
-# ═══════════════════════════════════════════════════════
-# DRAFT CANVAS — Render if a draft exists
-# ═══════════════════════════════════════════════════════
-if st.session_state.draft_content:
-    deed_display = st.session_state.current_deed_type.replace('_', ' ').title()
     st.markdown(f"""
-    <div class="draft-canvas">
-        <div class="draft-canvas-header">
-            <span class="deed-badge">📜 {deed_display}</span>
-            <span class="draft-meta">Live Draft • Editable</span>
+    <div class="sd-hero">
+        <div class="sd-hero-icon">🛠️</div>
+        <div>
+            <h3>Service Delivery Agent</h3>
+            <p class="sd-hero-sub">Real-time updates · Discrepancy resolution · Escalation support</p>
+            <div class="sd-user-chip">👤 {sd_display_name} · {sd_phone}</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # Render draft content as markdown inside a styled container
-    with st.container():
-        st.markdown(
-            f'<div class="draft-canvas-content">', unsafe_allow_html=True
-        )
-        st.markdown(st.session_state.draft_content)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # Action buttons — logged-in users get full controls, free users see locked prompt
-    if is_logged_in:
-        st.markdown('<div class="draft-canvas-actions">', unsafe_allow_html=True)
-        col_pdf, col_word, col_export, col_link = st.columns([1, 1, 1, 2])
-
-        # ── Download as PDF ──
-        with col_pdf:
-            st.markdown('<div class="download-btn">', unsafe_allow_html=True)
-            pdf_bytes = _generate_pdf(
-                st.session_state.draft_content,
-                st.session_state.current_deed_type,
-            )
-            deed_slug = st.session_state.current_deed_type.replace(' ', '_')
-            st.download_button(
-                label="⬇ Download PDF",
-                data=pdf_bytes,
-                file_name=f"Vault_Draft_{deed_slug}.pdf",
-                mime="application/pdf",
-                key="dl_pdf",
-            )
+    # Escalation buttons
+    if st.session_state.sd_escalation_pending:
+        st.markdown("""
+        <div class="escalation-panel">
+            <div class="ep-title">⚠️ This issue may need human support</div>
+            <div class="ep-sub">Please choose how you'd like to escalate this case:</div>
+        </div>
+        """, unsafe_allow_html=True)
+        esc_c1, esc_c2, _ = st.columns([2, 2, 1])
+        with esc_c1:
+            st.markdown('<div class="esc-poc-btn">', unsafe_allow_html=True)
+            if st.button("👤 Escalate to POC", use_container_width=True, key="esc_poc"):
+                with st.spinner("Escalating to Point of Contact…"):
+                    write_escalation(sd_phone, "POC", sd_user,
+                                     st.session_state.sd_chat_id, st.session_state.sd_messages)
+                st.session_state.sd_escalation_pending = False
+                msg = ("✅ Escalated to your **Point of Contact**. "
+                       "They will reach out to you shortly on your registered number.")
+                st.session_state.sd_messages.append({"role": "assistant", "content": msg})
+                save_sd_chat(sd_phone, st.session_state.sd_chat_id,
+                             st.session_state.sd_messages, st.session_state.sd_chat_name)
+                st.toast("Escalated to POC ✓")
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+        with esc_c2:
+            st.markdown('<div class="esc-ct-btn">', unsafe_allow_html=True)
+            if st.button("🏢 Escalate to Control Tower", use_container_width=True, key="esc_ct"):
+                with st.spinner("Escalating to Control Tower…"):
+                    write_escalation(sd_phone, "CT", sd_user,
+                                     st.session_state.sd_chat_id, st.session_state.sd_messages)
+                st.session_state.sd_escalation_pending = False
+                msg = ("✅ Escalated to our **Control Tower** team. "
+                       "Our operations team will prioritise your case within 24 hours.")
+                st.session_state.sd_messages.append({"role": "assistant", "content": msg})
+                save_sd_chat(sd_phone, st.session_state.sd_chat_id,
+                             st.session_state.sd_messages, st.session_state.sd_chat_name)
+                st.toast("Escalated to Control Tower ✓")
+                st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # ── Download as Word ──
-        with col_word:
-            st.markdown('<div class="download-btn">', unsafe_allow_html=True)
-            docx_bytes = _generate_docx(
-                st.session_state.draft_content,
-                st.session_state.current_deed_type,
-            )
-            st.download_button(
-                label="⬇ Download Word",
-                data=docx_bytes,
-                file_name=f"Vault_Draft_{deed_slug}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key="dl_docx",
-            )
-            st.markdown('</div>', unsafe_allow_html=True)
+    # Chat messages
+    for msg in st.session_state.sd_messages:
+        av = VAULT_MARK_DATA_URI if msg["role"] == "assistant" else (user_picture or None)
+        with st.chat_message(msg["role"], avatar=av):
+            st.markdown(msg["content"])
 
-        # ── Export to Google Doc ──
-        with col_export:
-            st.markdown('<div class="export-btn">', unsafe_allow_html=True)
-            if st.button("📄 Export to Google Doc", key="export_doc"):
-                user_token = st.session_state.get("user_token", "")
-                if not user_token:
-                    st.warning("Please sign out and sign in again to enable Google Docs export.")
-                else:
-                    deed_display_name = st.session_state.current_deed_type.replace('_', ' ').title()
-                    doc_title = f"Vault Draft - {deed_display_name}"
-                    try:
-                        with st.spinner("Creating Google Doc..."):
-                            doc_url = export_to_google_doc(
-                                doc_title,
-                                st.session_state.draft_content,
-                                user_token,
-                            )
-                        st.session_state.exported_doc_url = doc_url
-                        save_draft(
-                            user_email, user_name, st.session_state.chat_id,
-                            st.session_state.draft_content,
-                            st.session_state.current_deed_type,
-                            f"Exported to Google Doc",
-                            st.session_state.chat_name,
-                            doc_link=doc_url,
-                        )
-                        st.toast("✅ Google Doc created!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Export failed: {e}")
-            st.markdown('</div>', unsafe_allow_html=True)
+    # Auto-respond if last message is user
+    if st.session_state.sd_messages and st.session_state.sd_messages[-1]["role"] == "user":
+        with st.chat_message("assistant", avatar=VAULT_MARK_DATA_URI):
+            tph = st.empty()
+            tph.markdown(
+                '<div class="typing-indicator"><span></span><span></span><span></span></div>',
+                unsafe_allow_html=True
+            )
+            try:
+                sdr = ask_service_delivery(
+                    kb_dir=kb_dir_sd, question=st.session_state.sd_messages[-1]["content"],
+                    phone_number=sd_phone, user_data=st.session_state.sd_user_data,
+                    chat_history=st.session_state.sd_messages, verbose=False,
+                )
+                tph.empty()
+                st.markdown(sdr["answer"])
+                st.session_state.sd_messages.append({"role": "assistant", "content": sdr["answer"]})
+                if sdr["escalation_needed"]:
+                    st.session_state.sd_escalation_pending = True
+                save_sd_chat(sd_phone, st.session_state.sd_chat_id,
+                             st.session_state.sd_messages, st.session_state.sd_chat_name)
+                if sdr["escalation_needed"]:
+                    st.rerun()
+            except Exception as exc:
+                tph.empty()
+                st.error(str(exc))
 
-        # Show the Google Doc link if one exists
-        with col_link:
-            doc_url = st.session_state.get("exported_doc_url", "")
-            if doc_url:
-                st.link_button("🔗 Open Google Doc", doc_url, type="primary")
-        st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        # Free user — locked actions with sign-in prompt
+    # Chat input
+    if sd_p := st.chat_input("Ask about your service status…", key="sd_chat_input"):
+        if st.session_state.sd_chat_name == "Service Query":
+            st.session_state.sd_chat_name = sd_p[:25] + ("…" if len(sd_p) > 25 else "")
+        st.session_state.sd_messages.append({"role": "user", "content": sd_p})
+        st.session_state.sd_escalation_pending = False
+        st.rerun()
+
+else:
+    # ── NORMAL LEGAL ASSISTANT ───────────────────────────────────────────────
+    st.markdown(f"""
+    <div class="hero-block">
+        {VAULT_LOGO_SVG}
+        <h2>Legal Assistant</h2>
+        <p>Property documentation &amp; legal guidance · Exclusively in Bengaluru</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not is_logged_in:
         st.markdown(f"""
-        <div class="draft-canvas-actions locked">
-            🔒 Sign in to download or export this draft.
+        <div class="free-cta-bar">
+            <b>SIGN IN</b> to save chats, export drafts, and upload documents.
             <a href="{login_url}" class="cta-login-btn">
                 <img src="https://developers.google.com/identity/images/g-logo.png" alt="">
                 Sign In
@@ -1419,182 +2013,346 @@ if st.session_state.draft_content:
         </div>
         """, unsafe_allow_html=True)
 
-# Display chat messages (skip draft messages — they show in the canvas)
-for message in st.session_state.messages:
-    if message.get("role") == "draft":
-        continue  # Rendered in canvas above
-    avatar = VAULT_MARK_DATA_URI if message["role"] == "assistant" else (user_picture or None)
-    with st.chat_message(message["role"], avatar=avatar):
-        st.markdown(message["content"])
 
-# ═══════════════════════════════════════════════════════
-# RESPONSE GENERATION — Handles both standard and drafting flows
-# ═══════════════════════════════════════════════════════
+if not st.session_state.get("sd_show_phone_auth") and not st.session_state.get("sd_mode"):
+    # Empty state with CLICKABLE suggestion chips (#2)
+    if not st.session_state.messages:
+        st.markdown(f"""
+        <div class="empty-state">
+            <h3>How can I help you today?</h3>
+            <p>Ask about property documentation, legal processes, or Vault's services in Bengaluru.</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-def _handle_response(prompt_text):
-    """Process a user message and generate a response (standard or drafting)."""
-    kb_dir = os.path.dirname(os.path.abspath(__file__))
-
-    result = ask(
-        kb_dir, prompt_text,
-        st.session_state.messages,
-        user_name=user_name,
-        user_email=user_email,
-        uploaded_docs_context=st.session_state.uploaded_docs_context,
-        existing_draft=st.session_state.draft_content,
-        is_drafting_active=st.session_state.drafting_mode,
-        verbose=False,
-    )
-
-    if isinstance(result, dict):
-        # Drafting response — update canvas and save draft
-        st.session_state.drafting_mode = True
-        st.session_state.draft_content = result["draft"]
-        st.session_state.current_deed_type = result["deed_type"]
-
-        # Save draft to Firebase (logged-in only)
-        if is_logged_in:
-            save_draft(
-                user_email, user_name, st.session_state.chat_id,
-                result["draft"],
-                result["deed_type"],
-                result["summary"],
-                st.session_state.chat_name,
-            )
-
-        # Add the short assistant message to chat
-        assistant_msg = result["assistant_message"]
-        st.session_state.messages.append({"role": "assistant", "content": assistant_msg})
-        if is_logged_in:
-            save_chat(user_email, user_name, st.session_state.chat_id,
-                      st.session_state.messages, st.session_state.chat_name)
-
-        return assistant_msg
-    else:
-        # Standard response
-        st.session_state.messages.append({"role": "assistant", "content": result})
-        if is_logged_in:
-            save_chat(user_email, user_name, st.session_state.chat_id,
-                      st.session_state.messages, st.session_state.chat_name)
-        return result
-
-
-# If last message is user (just asked), auto-trigger the response
-if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-    # Check there's no assistant response right after
-    needs_response = True
-    if len(st.session_state.messages) >= 2 and st.session_state.messages[-1]["role"] != "user":
-        needs_response = False
-
-    if needs_response:
-        last_prompt = st.session_state.messages[-1]["content"]
-        with st.chat_message("assistant", avatar=VAULT_MARK_DATA_URI):
-            typing_placeholder = st.empty()
-            typing_placeholder.markdown(
-                '<div class="typing-indicator"><span></span><span></span><span></span></div>',
-                unsafe_allow_html=True
-            )
-            try:
-                answer = _handle_response(last_prompt)
-                typing_placeholder.empty()
-                st.markdown(answer)
-                # If drafting, rerun to show the canvas
-                if st.session_state.drafting_mode:
+        # Clickable chips — these are real st.button elements
+        st.markdown('<div class="chip-grid">', unsafe_allow_html=True)
+        chip_cols = st.columns(3)
+        for i, chip_text in enumerate(SUGGESTION_CHIPS):
+            with chip_cols[i % 3]:
+                if st.button(chip_text, key=f"chip_{i}"):
+                    st.session_state.chat_name = chip_text[:20] + ("..." if len(chip_text) > 20 else "")
+                    st.session_state.messages.append({"role": "user", "content": chip_text})
                     st.rerun()
-            except Exception as e:
-                typing_placeholder.empty()
-                error_msg = f"I encountered an error: {str(e)}\n\nPlease make sure:\n1. The knowledge base is ingested (`python setup.py ingest`)\n2. Your GEMINI_API_KEY is set in .env"
-                st.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# ═══════════════════════════════════════════════════════
-# FILE UPLOAD — logged-in users only
-# ═══════════════════════════════════════════════════════
-if is_logged_in:
-    with st.expander("📎 Attach documents (PDF / Image)", expanded=False):
-        st.markdown(
-            '<p style="color:#9CA3AF; font-size:0.78rem; margin:0 0 0.5rem 0;">'
-            'Upload previous deeds, Aadhaar/PAN, E-Khata, or property tax receipts. '
-            'Uploading a document will enter legal drafting mode.</p>',
-            unsafe_allow_html=True,
+    # ═══════════════════════════════════════════════════════
+    # HELPERS — Generate downloadable PDF / DOCX from draft
+    # ═══════════════════════════════════════════════════════
+
+    def _strip_md(text: str) -> str:
+        """Return plain text from Markdown (best-effort)."""
+        text = re.sub(r'#{1,6}\s*', '', text)          # headings
+        text = re.sub(r'\*{1,2}(.+?)\*{1,2}', r'\1', text)  # bold/italic
+        text = re.sub(r'[-*]\s+', '- ', text)            # bullets
+        text = text.encode('latin-1', errors='replace').decode('latin-1')  # safe for PDF
+        return text.strip()
+
+
+    def _generate_pdf(content: str, deed_type: str) -> bytes:
+        """Create a simple PDF from Markdown draft content."""
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=20)
+        pdf.add_page()
+        pdf.set_font('Helvetica', 'B', 16)
+        title = deed_type.replace('_', ' ').title()
+        pdf.cell(0, 12, title, ln=True, align='C')
+        pdf.ln(6)
+        pdf.set_font('Helvetica', '', 11)
+        plain = _strip_md(content)
+        for line in plain.split('\n'):
+            stripped = line.strip()
+            if not stripped:
+                pdf.ln(4)
+                continue
+            pdf.multi_cell(0, 6, stripped)
+            pdf.ln(2)
+        return bytes(pdf.output())
+
+
+    def _generate_docx(content: str, deed_type: str) -> bytes:
+        """Create a DOCX from Markdown draft content."""
+        doc = DocxDocument()
+        title = deed_type.replace('_', ' ').title()
+        heading = doc.add_heading(title, level=0)
+        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        plain = _strip_md(content)
+        for line in plain.split('\n'):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            p = doc.add_paragraph(stripped)
+            for run in p.runs:
+                run.font.size = Pt(11)
+        buf = io.BytesIO()
+        doc.save(buf)
+        return buf.getvalue()
+
+
+    # ═══════════════════════════════════════════════════════
+    # DRAFT CANVAS — Render if a draft exists
+    # ═══════════════════════════════════════════════════════
+    if st.session_state.draft_content:
+        deed_display = st.session_state.current_deed_type.replace('_', ' ').title()
+        st.markdown(f"""
+        <div class="draft-canvas">
+            <div class="draft-canvas-header">
+                <span class="deed-badge">📜 {deed_display}</span>
+                <span class="draft-meta">Live Draft • Editable</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Render draft content as markdown inside a styled container
+        with st.container():
+            st.markdown(
+                f'<div class="draft-canvas-content">', unsafe_allow_html=True
+            )
+            st.markdown(st.session_state.draft_content)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Action buttons — logged-in users get full controls, free users see locked prompt
+        if is_logged_in:
+            st.markdown('<div class="draft-canvas-actions">', unsafe_allow_html=True)
+            col_pdf, col_word, col_export, col_link = st.columns([1, 1, 1, 2])
+
+            # ── Download as PDF ──
+            with col_pdf:
+                st.markdown('<div class="download-btn">', unsafe_allow_html=True)
+                pdf_bytes = _generate_pdf(
+                    st.session_state.draft_content,
+                    st.session_state.current_deed_type,
+                )
+                deed_slug = st.session_state.current_deed_type.replace(' ', '_')
+                st.download_button(
+                    label="⬇ Download PDF",
+                    data=pdf_bytes,
+                    file_name=f"Vault_Draft_{deed_slug}.pdf",
+                    mime="application/pdf",
+                    key="dl_pdf",
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # ── Download as Word ──
+            with col_word:
+                st.markdown('<div class="download-btn">', unsafe_allow_html=True)
+                docx_bytes = _generate_docx(
+                    st.session_state.draft_content,
+                    st.session_state.current_deed_type,
+                )
+                st.download_button(
+                    label="⬇ Download Word",
+                    data=docx_bytes,
+                    file_name=f"Vault_Draft_{deed_slug}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="dl_docx",
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # ── Export to Google Doc ──
+            with col_export:
+                st.markdown('<div class="export-btn">', unsafe_allow_html=True)
+                if st.button("📄 Export to Google Doc", key="export_doc"):
+                    user_token = st.session_state.get("user_token", "")
+                    if not user_token:
+                        st.warning("Please sign out and sign in again to enable Google Docs export.")
+                    else:
+                        deed_display_name = st.session_state.current_deed_type.replace('_', ' ').title()
+                        doc_title = f"Vault Draft - {deed_display_name}"
+                        try:
+                            with st.spinner("Creating Google Doc..."):
+                                doc_url = export_to_google_doc(
+                                    doc_title,
+                                    st.session_state.draft_content,
+                                    user_token,
+                                )
+                            st.session_state.exported_doc_url = doc_url
+                            save_draft(
+                                user_email, user_name, st.session_state.chat_id,
+                                st.session_state.draft_content,
+                                st.session_state.current_deed_type,
+                                f"Exported to Google Doc",
+                                st.session_state.chat_name,
+                                doc_link=doc_url,
+                            )
+                            st.toast("✅ Google Doc created!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Export failed: {e}")
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # Show the Google Doc link if one exists
+            with col_link:
+                doc_url = st.session_state.get("exported_doc_url", "")
+                if doc_url:
+                    st.link_button("🔗 Open Google Doc", doc_url, type="primary")
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            # Free user — locked actions with sign-in prompt
+            st.markdown(f"""
+            <div class="draft-canvas-actions locked">
+                🔒 Sign in to download or export this draft.
+                <a href="{login_url}" class="cta-login-btn">
+                    <img src="https://developers.google.com/identity/images/g-logo.png" alt="">
+                    Sign In
+                </a>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # Display chat messages (skip draft messages — they show in the canvas)
+    for message in st.session_state.messages:
+        if message.get("role") == "draft":
+            continue  # Rendered in canvas above
+        avatar = VAULT_MARK_DATA_URI if message["role"] == "assistant" else (user_picture or None)
+        with st.chat_message(message["role"], avatar=avatar):
+            st.markdown(message["content"])
+
+    # ═══════════════════════════════════════════════════════
+    # RESPONSE GENERATION — Handles both standard and drafting flows
+    # ═══════════════════════════════════════════════════════
+
+    def _handle_response(prompt_text):
+        """Process a user message and generate a response (standard or drafting)."""
+        kb_dir = os.path.dirname(os.path.abspath(__file__))
+
+        result = ask(
+            kb_dir, prompt_text,
+            st.session_state.messages,
+            user_name=user_name,
+            user_email=user_email,
+            uploaded_docs_context=st.session_state.uploaded_docs_context,
+            existing_draft=st.session_state.draft_content,
+            is_drafting_active=st.session_state.drafting_mode,
+            verbose=False,
         )
-        uploaded_file = st.file_uploader(
-            "Upload PDF or Image",
-            type=["pdf", "png", "jpg", "jpeg", "tiff", "bmp"],
-            key="doc_uploader",
-            label_visibility="collapsed",
-        )
-        if uploaded_file is not None:
-            file_bytes = uploaded_file.read()
-            mime_type = uploaded_file.type or "application/octet-stream"
 
-            # Auto-enter drafting mode on file upload
-            if not st.session_state.drafting_mode:
-                st.session_state.drafting_mode = True
-                if not st.session_state.current_deed_type:
-                    st.session_state.current_deed_type = "legal_document"
+        if isinstance(result, dict):
+            # Drafting response — update canvas and save draft
+            st.session_state.drafting_mode = True
+            st.session_state.draft_content = result["draft"]
+            st.session_state.current_deed_type = result["deed_type"]
 
-            deed_name = st.session_state.current_deed_type or "legal_document"
+            # Save draft to Firebase (logged-in only)
+            if is_logged_in:
+                save_draft(
+                    user_email, user_name, st.session_state.chat_id,
+                    result["draft"],
+                    result["deed_type"],
+                    result["summary"],
+                    st.session_state.chat_name,
+                )
 
-            with st.spinner("Uploading to Drive..."):
+            # Add the short assistant message to chat
+            assistant_msg = result["assistant_message"]
+            st.session_state.messages.append({"role": "assistant", "content": assistant_msg})
+            if is_logged_in:
+                save_chat(user_email, user_name, st.session_state.chat_id,
+                          st.session_state.messages, st.session_state.chat_name)
+
+            return assistant_msg
+        else:
+            # Standard response
+            st.session_state.messages.append({"role": "assistant", "content": result})
+            if is_logged_in:
+                save_chat(user_email, user_name, st.session_state.chat_id,
+                          st.session_state.messages, st.session_state.chat_name)
+            return result
+
+
+    # If last message is user (just asked), auto-trigger the response
+    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+        # Check there's no assistant response right after
+        needs_response = True
+        if len(st.session_state.messages) >= 2 and st.session_state.messages[-1]["role"] != "user":
+            needs_response = False
+
+        if needs_response:
+            last_prompt = st.session_state.messages[-1]["content"]
+            with st.chat_message("assistant", avatar=VAULT_MARK_DATA_URI):
+                typing_placeholder = st.empty()
+                typing_placeholder.markdown(
+                    '<div class="typing-indicator"><span></span><span></span><span></span></div>',
+                    unsafe_allow_html=True
+                )
                 try:
-                    result = upload_file(
-                        user_email, deed_name,
-                        file_bytes, uploaded_file.name, mime_type
-                    )
-                    st.toast(f"✅ Uploaded: {uploaded_file.name}")
-                    st.session_state.uploaded_files_info.append(result)
+                    answer = _handle_response(last_prompt)
+                    typing_placeholder.empty()
+                    st.markdown(answer)
+                    # If drafting, rerun to show the canvas
+                    if st.session_state.drafting_mode:
+                        st.rerun()
                 except Exception as e:
-                    st.error(f"Upload failed: {e}")
-                    result = None
+                    typing_placeholder.empty()
+                    error_msg = f"I encountered an error: {str(e)}\n\nPlease make sure:\n1. The knowledge base is ingested (`python setup.py ingest`)\n2. Your GEMINI_API_KEY is set in .env"
+                    st.error(error_msg)
+                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
-            # Extract text using Gemini 2.5 Flash OCR
-            if result:
-                with st.spinner("Reading document with Gemini OCR..."):
-                    extracted = extract_text_with_gemini(file_bytes, mime_type, uploaded_file.name)
-                    st.session_state.uploaded_docs_context += (
-                        f"\n\n--- {uploaded_file.name} ---\n{extracted}\n"
-                    )
-                st.rerun()
+    # ═══════════════════════════════════════════════════════
+    # FILE UPLOAD — logged-in users only
+    # ═══════════════════════════════════════════════════════
+    if is_logged_in:
+        with st.expander("📎 Attach documents (PDF / Image)", expanded=False):
+            st.markdown(
+                '<p style="color:#9CA3AF; font-size:0.78rem; margin:0 0 0.5rem 0;">'
+                'Upload previous deeds, Aadhaar/PAN, E-Khata, or property tax receipts. '
+                'Uploading a document will enter legal drafting mode.</p>',
+                unsafe_allow_html=True,
+            )
+            uploaded_file = st.file_uploader(
+                "Upload PDF or Image",
+                type=["pdf", "png", "jpg", "jpeg", "tiff", "bmp"],
+                key="doc_uploader",
+                label_visibility="collapsed",
+            )
+            if uploaded_file is not None:
+                file_bytes = uploaded_file.read()
+                mime_type = uploaded_file.type or "application/octet-stream"
 
-        # Show uploaded files inline
-        if st.session_state.uploaded_files_info:
-            for f_info in st.session_state.uploaded_files_info:
-                link = f_info.get("web_view_link", "")
-                name = f_info.get("filename", "file")
-                if link:
-                    st.markdown(f"📄 [{name}]({link})")
-                else:
-                    st.markdown(f"📄 {name}")
+                # Auto-enter drafting mode on file upload
+                if not st.session_state.drafting_mode:
+                    st.session_state.drafting_mode = True
+                    if not st.session_state.current_deed_type:
+                        st.session_state.current_deed_type = "legal_document"
 
-# Chat input
-if prompt := st.chat_input("Ask your question here..."):
-    if st.session_state.chat_name == "New Chat":
-        st.session_state.chat_name = prompt[:20] + ("..." if len(prompt) > 20 else "")
+                deed_name = st.session_state.current_deed_type or "legal_document"
 
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user", avatar=(user_picture or None)):
-        st.markdown(prompt)
+                with st.spinner("Uploading to Drive..."):
+                    try:
+                        result = upload_file(
+                            user_email, deed_name,
+                            file_bytes, uploaded_file.name, mime_type
+                        )
+                        st.toast(f"✅ Uploaded: {uploaded_file.name}")
+                        st.session_state.uploaded_files_info.append(result)
+                    except Exception as e:
+                        st.error(f"Upload failed: {e}")
+                        result = None
 
-    with st.chat_message("assistant", avatar=VAULT_MARK_DATA_URI):
-        typing_placeholder = st.empty()
-        typing_placeholder.markdown(
-            '<div class="typing-indicator"><span></span><span></span><span></span></div>',
-            unsafe_allow_html=True
-        )
+                # Extract text using Gemini 2.5 Flash OCR
+                if result:
+                    with st.spinner("Reading document with Gemini OCR..."):
+                        extracted = extract_text_with_gemini(file_bytes, mime_type, uploaded_file.name)
+                        st.session_state.uploaded_docs_context += (
+                            f"\n\n--- {uploaded_file.name} ---\n{extracted}\n"
+                        )
+                    st.rerun()
 
-        try:
-            answer = _handle_response(prompt)
-            typing_placeholder.empty()
-            st.markdown(answer)
-            # If drafting, rerun to show/update the canvas
-            if st.session_state.drafting_mode:
-                st.rerun()
-        except Exception as e:
-            typing_placeholder.empty()
-            error_msg = f"I encountered an error: {str(e)}\n\nPlease make sure:\n1. The knowledge base is ingested (`python setup.py ingest`)\n2. Your GEMINI_API_KEY is set in .env"
-            st.error(error_msg)
-            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+            # Show uploaded files inline
+            if st.session_state.uploaded_files_info:
+                for f_info in st.session_state.uploaded_files_info:
+                    link = f_info.get("web_view_link", "")
+                    name = f_info.get("filename", "file")
+                    if link:
+                        st.markdown(f"📄 [{name}]({link})")
+                    else:
+                        st.markdown(f"📄 {name}")
+
+    # Chat input
+    if prompt := st.chat_input("Ask your question here..."):
+        if st.session_state.chat_name == "New Chat":
+            st.session_state.chat_name = prompt[:20] + ("..." if len(prompt) > 20 else "")
+
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.rerun()
 
 
 # Footer
